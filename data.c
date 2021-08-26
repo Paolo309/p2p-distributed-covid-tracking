@@ -1,48 +1,63 @@
-/*
-entry (timestamp [key], tamponi, nuovi_casi)
-
-register:
-    dd-mm-yyyy num_t num_c
-where:
-- entry not present if no add for timestamp has been done
-- num_t = 0 if entry exists but no add for tamponi has been done on timestamp
-- num_c = 0 if entry exists but no add for nuovi_casi has been done on timestamp
-
-aggregates:
-    dd-mm-yyyy F num_t num_c
-where:
-- F (if 0 both computed; if 1 num_t computed; if 2 num_c computed)
-- entry not present if aggr never computed
-- num_t valid value if F = 0 || F = 1
-- num_c valid value if F = 0 || F = 2
-
-
-keep list of entries:
-- read ordered from file
-
-
-*/
-
 #include "data.h"
 
-Entry *create_entry(char* timestamp, int32_t tamponi, int32_t nuovi_casi, uint8_t flag)
+/**
+ * Create a new entry.
+ * 
+ * @param timestamp 
+ * @param tamponi 
+ * @param nuovi_casi 
+ * @param flags Either SCOPE_LOCAL or ENTRY_GLOBAL
+ * @return The new entry
+ */
+Entry *create_entry(char* timestamp, int32_t tamponi, int32_t nuovi_casi, uint8_t flags)
 {
     Entry* tmp = malloc(sizeof(Entry));
     
     strncpy(tmp->timestamp, timestamp, TIMESTAMP_STRLEN);
     tmp->tamponi = tamponi;
     tmp->nuovi_casi = nuovi_casi;
-    tmp->flag = flag;
+    tmp->flags = flags;
     tmp->prev = tmp->next = NULL;
     
     return tmp;
 }
 
+/**
+ * Compare two entries by timestamp and data type. If the data types are equal,
+ * returns the result of strcmp() applied to the two timestamps, or else it
+ * returns -1 if the first entry il TYPE_TOTAL and the second one TYPE_VARIATION,
+ * +1 otherwise.
+ * 
+ * @param a 
+ * @param b 
+ * @return Returns a negative value if the first entry precedes the second; zero
+ * if they are equal; a positive value otherwise.
+ */
+int cmp_entries(const Entry *a, const Entry *b)
+{
+    int cmp_res = strcmp(a->timestamp, b->timestamp);
+
+    if (cmp_res != 0)
+        return cmp_res;
+
+    return (a->flags & ENTRY_TYPE) - (b->flags & ENTRY_TYPE);
+}
+
+/**
+ * Initialize the EntryList structure.
+ * 
+ * @param list 
+ */
 void init_entry_list(EntryList *list)
 {
     list->first = list->last = NULL;
 }
 
+/**
+ * Free all the entries in the EntryList structure.
+ * 
+ * @param list 
+ */
 void free_entry_list(EntryList *list)
 {
     Entry *p, *tmp;
@@ -56,38 +71,29 @@ void free_entry_list(EntryList *list)
     }
 }
 
+/**
+ * @param list 
+ * @return true if the list is empty 
+ */
 bool is_entry_list_empty(EntryList *list)
 {
     return list->first == NULL;
 }
 
-/* Entry *push_back_entry(EntryList *list, char* timestamp, int32_t tamponi, int32_t nuovi_casi)
-{
-    Entry *tmp;
-    
-    if (list == NULL) return;
-    
-    tmp = create_entry(timestamp, tamponi, nuovi_casi);
-    
-    if (list->first == NULL) 
-    {
-        list->first = tmp;
-    }
-    else 
-    {
-        tmp->prev = list->last;
-        list->last->next = tmp;
-    }
-    
-    list->last = tmp;
-} */
-
+/**
+ * Loads a register from the specified file into a list. The entry list
+ * must be already allocated but not initialized. It does not reorder
+ * the entries, to do that, use `sort register.txt -o register.txt`.
+ * 
+ * @param entries 
+ * @param file_name 
+ */
 void load_register_from_file(EntryList *entries, const char* file_name)
 {
     FILE *fp;
     Entry *tmp_entry, *prev;
     char tmp_ts[TIMESTAMP_STRLEN];
-    int32_t flag;
+    int32_t flags;
     int32_t tmp_tamponi, tmp_ncasi;
     
     init_entry_list(entries);
@@ -95,10 +101,10 @@ void load_register_from_file(EntryList *entries, const char* file_name)
     
     fp = fopen(file_name, "r");
     
-    while (fscanf(fp, "%s %d %d %d", tmp_ts, &tmp_tamponi, &tmp_ncasi, &flag) != EOF)
-    {
-        tmp_entry = create_entry(tmp_ts, tmp_tamponi, tmp_ncasi, flag);
-        
+
+    while (fscanf(fp, "%s %d %d %d", tmp_ts, &flags, &tmp_tamponi, &tmp_ncasi) != EOF) {
+        tmp_entry = create_entry(tmp_ts, tmp_tamponi, tmp_ncasi, flags);
+                
         tmp_entry->prev = prev;
         if (prev != NULL) prev->next = tmp_entry;
         prev = tmp_entry;
@@ -112,49 +118,130 @@ void load_register_from_file(EntryList *entries, const char* file_name)
     fclose(fp);
 }
 
-void print_entries_asc(EntryList *list)
+/**
+ * Merge the src entry list into dest. At the end, both entry lists
+ * head and tail pointer point to the same list. Duplicate entries are
+ * aggregated into the version present in dest. The version in src gets
+ * freed. Entries are kept sorted by ascending timestamps.
+ * 
+ * TODO check what to with flags! Should it only aggregate when dest flags
+ * is not local?
+ * 
+ * @param dest 
+ * @param src 
+ */
+void merge_entry_lists(EntryList *dest, EntryList *src)
 {
-    Entry* p = list->first;
+    Entry *a, *b; /* pointers to an entry in dest and src respectively */
+    Entry *tmp, *tmp_prev;
+    int cmp_res; /* result of comparison between timestamps */
     
-    while (p)
+    if (dest == NULL || src == NULL)
+        return;
+    
+    /* if src list empty, nothing to merge */
+    if (is_entry_list_empty(src))
+        return;
+    
+    /* if dest list empty, nothing to merge, just copy src list pointers */
+    if (is_entry_list_empty(dest))
     {
-        printf("%s t:%d c:%d ", p->timestamp, p->tamponi, p->nuovi_casi);
+        dest->first = src->first;
+        dest->last = src->last;
+        return;
+    }
+    
+    a = dest->last;
+    b = src->last;
+    
+    /* iterate both lists from last entry, backward, until it reaches 
+       the head of one of the two */
+    while (a != NULL && b != NULL)
+    {
+        /* make `a` point to first entry in dest where a->timestamp <= b->timestamp */
+        while (a != NULL && (cmp_res = cmp_entries(a, b)) > 0)
+            a = a->prev;
         
-        if (p->flag == ENTRY_LOCAL) printf("LOCAL\n");
-        else if (p->flag == ENTRY_GLOBAL) printf("GLOBAL\n");
-        else printf("ERR\n");
+        /* N.B. If two entries have the same timestamp but different type, the one with
+        type ENTRY_TOTAL is considered "smaller", and the two will never be merged. */
         
-        p = p->next;
+        /* all entries in src are smaller than entries in dest */
+        if (a == NULL)
+            break;
+        
+        /* found an entry in dest with same timestamp of entry in src */
+        if (cmp_res == 0)
+        {
+            /* merge entries only if the dest entry is LOCAL */
+            if ((a->flags & ENTRY_SCOPE) == SCOPE_LOCAL)
+            {
+                /* update dest entry with src entry data, and delete the src entry */
+                
+                a->tamponi += b->tamponi;
+                a->nuovi_casi += b->nuovi_casi;
+                a->flags = b->flags; /* ? */
+            }
+            
+            tmp = b->prev;
+            free(b);
+            b = tmp;
+            
+            a = a->prev;
+            continue;
+        }
+        
+        /* inserting dest entry after src entry pointed by a */
+        
+        tmp_prev = b->prev; /* used later to continue the loop */
+        
+        tmp = a->next;
+        
+        /* if a is not the last entry in dest */
+        if (a->next != NULL) a->next->prev = b;
+        a->next = b;
+        
+        /* if b is not the first entry in src */
+        if (b->prev != NULL) b->prev->next = NULL;
+        b->prev = a;
+        
+        b->next = tmp;
+        
+        /* keep updated the pointer to the last entry in dest: b is now after a */
+        if (a == dest->last)
+            dest->last = b;
+        
+        b = tmp_prev;
+    }
+    
+    /* keep updated the pointer to the last entry in src */
+    src->last = dest->last;
+    
+    /* no more entries in src to copy in dest */
+    if (b == NULL)
+    {
+        /* keep updated the pointer to the fist entry in src */
+        src->first = dest->first;
+        /* dest head isn't new, so dest->first is already pointing to dest head */
+        return;
+    }
+    
+    /* all remaining entries in src are smaller than remaining entries in dest */
+    if (a == NULL)
+    {
+        /* copying remaining src entries in dest */
+        b->next = dest->first;
+        dest->first->prev = b;
+        
+        /* keep updated the pointer to the first entry in dest */
+        dest->first = src->first;
     }
 }
-
-void print_entries_dsc(EntryList *list)
-{
-    Entry* p = list->last;
-    
-    while (p)
-    {
-        printf("%s t:%d c:%d ", p->timestamp, p->tamponi, p->nuovi_casi);
-        
-        if (p->flag == ENTRY_LOCAL) printf("LOCAL\n");
-        else if (p->flag == ENTRY_GLOBAL) printf("GLOBAL\n");
-        else printf("ERR\n");
-        
-        p = p->prev;
-    }
-}
-
-/* 
-    TODO considerare di passare entry per valore 
-    Alternativamente: passare puntatore a entry, ma fare free
-    della entry nella lista. (Dipende da come voglio usare la funzione dopo)
-*/
 
 /**
- * @brief Add an entry to the specified entry list
- * 
- * @note If entry already exists in list, new entry is copied
- * into already present entry
+ * Add an entry to the specified entry list. Entries are kept sorted
+ * by ascending timestamp. Duplicate entries are aggregated with 
+ * already existing entries. In this case, the entry passed as 
+ * parameter can be freed. No check on flags is performed.
  * 
  * @param entries 
  * @param entry 
@@ -176,15 +263,20 @@ void add_entry(EntryList *entries, Entry *entry)
     p = entries->last;
     while (p)
     {
-        cmp_res = strcmp(p->timestamp, entry->timestamp);
+        /* cmp_res = strcmp(p->timestamp, entry->timestamp); */
+        cmp_res = cmp_entries(p, entry);
         
         /* entry already in register */
         if (cmp_res == 0)
         {
-            /* update entry values */
-            p->tamponi += entry->tamponi;
-            p->nuovi_casi += entry->nuovi_casi;
-            p->flag = entry->flag;
+            /* merge entries only if the dest entry is LOCAL */
+            if ((p->flags & ENTRY_SCOPE) == SCOPE_LOCAL)
+            {
+                /* update entry values */
+                p->tamponi += entry->tamponi;
+                p->nuovi_casi += entry->nuovi_casi;
+                p->flags = entry->flags;
+            }
             return;
         }
         
@@ -218,107 +310,50 @@ void add_entry(EntryList *entries, Entry *entry)
     entries->first = entry;
 }
 
-void merge_entry_lists(EntryList *dest, EntryList *src)
+void print_entry(Entry *entry) 
 {
-    Entry *a, *b, *tmp, *tmp_prev;
-    int cmp_res;
+    printf("[ %s ]\t", entry->timestamp);
+
+    printf("(%d) ", entry->flags);
+
+    if (entry->flags & TYPE_VARIATION)
+        printf("VARIAZ. ");
+    else
+        printf("TOTALE ");
+
+    if (entry->flags & SCOPE_GLOBAL)
+        printf("GLOBALE");
+    else
+        printf("LOCALE");
+
+    printf("\t");
+
+    printf("tamponi: %d\tnuovi_casi: %d\n", entry->tamponi, entry->nuovi_casi);
+}
+
+void print_entries_asc(EntryList *list)
+{
+    Entry* p = list->first;
     
-    if (dest == NULL || src == NULL)
-        return;
-    
-    /* if src list empty, nothing to merge */
-    if (is_entry_list_empty(src))
-        return;
-    
-    /* if dest list empty, nothing to merge, just copy src list pointers */
-    if (is_entry_list_empty(dest))
+    while (p)
     {
-        dest->first = src->first;
-        dest->last = src->last;
-        return;
-    }
-    
-    a = dest->last;
-    b = src->last;
-    
-    /* iterate both lists from last entry, backward, until it reaches 
-       the head of one of the two */
-    while (a != NULL && b != NULL)
-    {
-        /* move a to first entry in dest where a->timestamp < b->timestamp */
-        while (a != NULL && (cmp_res = strcmp(a->timestamp, b->timestamp)) > 0)
-            a = a->prev;
-        
-        /* all entries in src are smaller than entries in dest */
-        if (a == NULL)
-            break;
-        
-        /* found an entry in dest with same timestamp of entry in src */
-        if (cmp_res == 0)
-        {
-            /* update dest entry with src entry data, and delete the src entry */
-            
-            a->tamponi += b->tamponi;
-            a->nuovi_casi += b->nuovi_casi;
-            a->flag = b->flag; /* ? */
-            
-            tmp = b->prev;
-            free(b);
-            b = tmp;
-            
-            a = a->prev;
-            continue;
-        }
-        
-        /* inserting dest entry after src entry pointed by a */
-        
-        tmp_prev = b->prev; /* used to continue the loop */
-        
-        tmp = a->next;
-        
-        /* if a is not the last entry in dest */
-        if (a->next != NULL) a->next->prev = b;
-        a->next = b;
-        
-        /* if b is not the first entry in src */
-        if (b->prev != NULL) b->prev->next = NULL;
-        b->prev = a;
-        
-        b->next = tmp;
-        
-        /* keep updated pointer to last entry in dest: b is now after a */
-        if (a == dest->last)
-            dest->last = b;
-        
-        b = tmp_prev;
-    }
-    
-    /* keep updated pointer to last entry in src */
-    src->last = dest->last;
-    
-    /* no more entries in src to copy in dest */
-    if (b == NULL)
-    {
-        /* keep updated pointer to fist entry in src */
-        src->first = dest->first;
-        /* dest head isn't new, so dest->first is already pointing to dest head */
-        return;
-    }
-    
-    /* all remaining entries in src are smaller than remaining entries in dest */
-    if (a == NULL)
-    {
-        /* copying remaining src entries in dest */
-        b->next = dest->first;
-        dest->first->prev = b;
-        
-        /* keep updated pointer to fist entry in dest */
-        dest->first = src->first;
+        print_entry(p);        
+        p = p->next;
     }
 }
 
+void print_entries_dsc(EntryList *list)
+{
+    Entry* p = list->last;
+    
+    while (p)
+    {
+        print_entry(p);
+        p = p->prev;
+    }
+}
 
-int maina()
+int main_test()
 {
     EntryList entries, others;
     Entry *tmp;
@@ -327,12 +362,15 @@ int maina()
     init_entry_list(&entries);
     init_entry_list(&others);
     
-    load_register_from_file(&entries, REGISTER_FNAME);
+    load_register_from_file(&entries, FNAME_REGISTER);
     
     printf("entries\n");
     print_entries_asc(&entries);
     
-    tmp = create_entry("2020-02-13", 100, 23, ENTRY_LOCAL);
+    tmp = create_entry("2020-01-12", 100, 23, SCOPE_GLOBAL);
+    add_entry(&others, tmp);
+
+    tmp = create_entry("2020-02-10", 200, 46, SCOPE_GLOBAL | TYPE_VARIATION);
     add_entry(&others, tmp);
     
     printf("others\n");
@@ -360,11 +398,11 @@ int maina()
     /* printf("DESC\n");
     print_entries_dsc(&entries); */
     
-    tmp = create_entry("2020-02-09", 100, 23, ENTRY_LOCAL);
+    tmp = create_entry("2020-02-09", 100, 23, SCOPE_LOCAL);
     
     add_entry(&entries, tmp);
     
-    tmp = create_entry("2020-02-10", 100, 0, ENTRY_GLOBAL);
+    tmp = create_entry("2020-02-10", 100, 0, SCOPE_GLOBAL);
     
     add_entry(&entries, tmp);
     
