@@ -111,8 +111,6 @@ int send_start_msg_to_dserver(ThisPeer *peer)
     int ret;
 
     msg.type = MSG_START;
-    /* sprintf(msg.body, "Hi from %d", peer->addr.sin_port);
-    msg.body_len = strlen(msg.body) + 1; */
     *(in_port_t*)msg.body = peer->addr.sin_port;
     msg.body_len = sizeof(in_port_t);
 
@@ -174,15 +172,19 @@ int cmd_start(ThisPeer *peer, int argc, char **argv)
     server_addr.sin_port = htons(ret);
 
     peer->dserver = socket(AF_INET, SOCK_DGRAM, 0);
-
     if (peer->dserver == -1)
     {
         perror("socket error");
         return -1;
     }
 
-    ret = connect(peer->dserver, (struct sockaddr *)&server_addr, sizeof(server_addr));
+    ret = bind(peer->dserver, (struct sockaddr*)&peer->addr, sizeof(peer->addr));
+    if (ret == -1)
+    {
+        perror("bind error");
+    }
 
+    ret = connect(peer->dserver, (struct sockaddr *)&server_addr, sizeof(server_addr));
     if (ret == -1)
     {
         perror("connect error");
@@ -214,6 +216,38 @@ char *cmd_str[NUM_CMDS] = { "start", "add", "get", "stop" };
 int (*cmd_func[NUM_CMDS])(ThisPeer*, int, char**) = 
     { &cmd_start, &cmd_add, &cmd_get, &cmd_stop };
 
+
+
+/* ########## FUNCTIONS THAT HANDLE SERVER REQUESTS ########## */
+
+void handle_failed_connection_attempt(ThisPeer *peer)
+{
+    printf("trying again in 3 seconds...\n");
+    sleep(3);
+    send_start_msg_to_dserver(peer);
+}
+
+void handle_set_neighbors_response(ThisPeer *peer, Message *msgp)
+{
+    /* int ret; */
+
+    if (peer->state == STATE_OFF) return;
+
+    if (peer->state == STATE_STARTING)
+        printf("setting list of neighbors\n");
+    else
+        printf("refreshing list of neighbors\n");
+
+    /* TODO free properly old list of peers */
+    peer->neighbors.first = peer->neighbors.last = NULL;
+    deserialize_peers(msgp->body, &peer->neighbors.first);
+    print_peers(peer->neighbors.first);
+
+    peer->state = STATE_STARTED;
+
+    clear_timeout(peer);
+    enable_user_input(peer);
+}
 
 
 /* ########## DEMULTIPLEXING ########## */
@@ -251,11 +285,8 @@ void demux_peer_request(ThisPeer *peer, int sd)
     printf("demultiplexing peer request\n");
 }
 
-
 void demux_server_request(ThisPeer *peer)
 {
-    /* TODO actually demultiplex */
-
     Message msg;
     int ret;
 
@@ -266,56 +297,16 @@ void demux_server_request(ThisPeer *peer)
     if (ret == -1)
     {
         if (peer->state == STATE_STARTING && errno == ECONNREFUSED)
-        {
-            printf("trying again in 3 seconds...\n");
-            sleep(3);
-            send_start_msg_to_dserver(peer);
-            return;
-        }
+            handle_failed_connection_attempt(peer);
+        else
+            printf("error while receiving message from server\n");
 
-        printf("error while receiving message from server\n");
         return;
     }
 
-    printf("received type %d\nbody length %d\n", msg.type, msg.body_len);
-
     if (msg.type == MSG_SET_NBRS)
     {
-        if (peer->state == STATE_OFF) return;
-
-        if (peer->state == STATE_STARTING)
-        {
-            printf("SETTING NEIGHBORS\n");
-
-            close(peer->dserver);
-
-            peer->dserver = socket(AF_INET, SOCK_DGRAM, 0);
-            if (peer->dserver == -1) 
-            {
-                perror("socket error");
-                return;
-            }
-
-            ret = bind(peer->dserver, (struct sockaddr*)&peer->addr, sizeof(peer->addr));
-            if (ret == -1)
-            {
-                perror("bind error");
-            }
-        }
-        else
-        {
-            printf("RESETTING NEIGHBORS\n");
-        }
-
-        /* TODO free properly old list of peers */
-        peer->neighbors.first = peer->neighbors.last = NULL;
-        deserialize_peers(msg.body, &peer->neighbors.first);
-        print_peers(peer->neighbors.first);
-
-        peer->state = STATE_STARTED;
-
-        clear_timeout(peer);
-        enable_user_input(peer);
+        handle_set_neighbors_response(peer, &msg);
     }
 }
 
