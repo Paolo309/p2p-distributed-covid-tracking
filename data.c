@@ -101,6 +101,7 @@ void load_register_from_file(EntryList *entries, const char* file_name)
     
     fp = fopen(file_name, "r");
     
+    tmp_entry = NULL;
 
     while (fscanf(fp, "%s %d %d %d", tmp_ts, &flags, &tmp_tamponi, &tmp_ncasi) != EOF) {
         tmp_entry = create_entry(tmp_ts, tmp_tamponi, tmp_ncasi, flags);

@@ -172,7 +172,7 @@ int main(int argc, char** argv)
             /* set client addr port to the value used to identify the peer */
             /* client_addr.sin_port = *(in_port_t*)msg.body; */
 
-            printf("removing node\n");
+            printf("removing node %d\n", ntohs(client_addr.sin_port));
             fflush(stdout);
 
             neighbors = remove_peer(&peers, &client_addr);
@@ -205,7 +205,14 @@ int main(int argc, char** argv)
             else
             {
                 printf("no more peers to connect\n");
-            }            
+            }     
+
+            node_p = neighbors;
+            while (node_p)
+            {
+                tell_neighbors(sd, &node_p->peer->addr, node_p->peer);
+                node_p = node_p->next;
+            }       
 
             /* print_graph(&peers); */
         }

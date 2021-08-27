@@ -253,6 +253,8 @@ GraphNode *remove_peer(Graph *nodes, struct sockaddr_in *addr)
 {
     GraphNode *node, *nbr, *tmp, *prec;
 
+    prec = NULL;
+
     /* remove peer from list of peers */
     node = search_peer_node_by_addr(
         nodes->first, addr, &prec

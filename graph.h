@@ -6,8 +6,8 @@
 #include <stdbool.h>
 #include <netinet/in.h>
 
-#define PUSH_FRONT true
-#define PUSH_BACK false
+#define PUSH_FRONT false
+#define PUSH_BACK true
 
 typedef struct Peer {
     struct sockaddr_in addr;
