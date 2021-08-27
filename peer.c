@@ -7,6 +7,7 @@
 #include "data.h"
 #include "comm.h"
 #include "commandline.h"
+#include "graph.h"
 
 
 int validate_port(const char *str_port)
@@ -37,15 +38,16 @@ int validate_port(const char *str_port)
 #define STATE_STARTING 1
 #define STATE_STARTED 2
 
-typedef struct Peer {
+typedef struct ThisPeer {
     struct sockaddr_in addr;
     fd_set sockets;
     int dserver, fdmax;
     int state;
     struct timeval timeout, *actual_timeout;
-} Peer;
+    Graph neighbors;
+} ThisPeer;
 
-void init_peer(Peer *peer, int host_port)
+void init_peer(ThisPeer *peer, int host_port)
 {
     memset(&peer->addr, 0, sizeof(peer->addr));
     peer->addr.sin_family = AF_INET;
@@ -56,9 +58,11 @@ void init_peer(Peer *peer, int host_port)
     peer->fdmax = 0;
     peer->dserver = -1;
     peer->state = STATE_OFF;
+
+    create_graph(&peer->neighbors);
 }
 
-void add_desc(Peer *peer, int fd)
+void add_desc(ThisPeer *peer, int fd)
 {
     FD_SET(fd, &peer->sockets);
     
@@ -66,7 +70,7 @@ void add_desc(Peer *peer, int fd)
         peer->fdmax = fd;
 }
 
-void remove_desc(Peer *peer, int fd)
+void remove_desc(ThisPeer *peer, int fd)
 {
     FD_CLR(fd, &peer->sockets);
     
@@ -77,38 +81,40 @@ void remove_desc(Peer *peer, int fd)
     }
 }
 
-void set_timeout(Peer *peer, int seconds)
+void set_timeout(ThisPeer *peer, int seconds)
 {
     peer->timeout.tv_sec = seconds;
     peer->timeout.tv_usec = 0;
     peer->actual_timeout = &peer->timeout;
 }
 
-void clear_timeout(Peer *peer)
+void clear_timeout(ThisPeer *peer)
 {
     peer->actual_timeout = NULL;
 }
 
-void enable_user_input(Peer *peer)
+void enable_user_input(ThisPeer *peer)
 {
     add_desc(peer, STDIN_FILENO);
 }
 
-void disable_user_input(Peer *peer)
+void disable_user_input(ThisPeer *peer)
 {
     remove_desc(peer, STDIN_FILENO);
 }
 
 
 
-int send_start_msg_to_dserver(Peer *peer)
+int send_start_msg_to_dserver(ThisPeer *peer)
 {
     Message msg;
     int ret;
 
     msg.type = MSG_START;
-    sprintf(msg.body, "Hi from %d", peer->addr.sin_port);
-    msg.body_len = strlen(msg.body) + 1;
+    /* sprintf(msg.body, "Hi from %d", peer->addr.sin_port);
+    msg.body_len = strlen(msg.body) + 1; */
+    *(in_port_t*)msg.body = peer->addr.sin_port;
+    msg.body_len = sizeof(in_port_t);
 
     ret = send_message(peer->dserver, &msg);
     if (ret == -1)
@@ -134,7 +140,7 @@ int send_start_msg_to_dserver(Peer *peer)
 
 /* ########## FUNCTIONS THAT HANDLE USER COMMANDS ########## */
 
-int cmd_start(Peer *peer, int argc, char **argv)
+int cmd_start(ThisPeer *peer, int argc, char **argv)
 {
     struct sockaddr_in server_addr;
     int ret;
@@ -186,17 +192,17 @@ int cmd_start(Peer *peer, int argc, char **argv)
     return send_start_msg_to_dserver(peer);
 }
 
-int cmd_add(Peer *peer, int argc, char **argv)
+int cmd_add(ThisPeer *peer, int argc, char **argv)
 {
     return -1;
 }
 
-int cmd_get(Peer *peer, int argc, char **argv)
+int cmd_get(ThisPeer *peer, int argc, char **argv)
 {
     return -1;
 }
 
-int cmd_stop(Peer *peer, int argc, char **argv)
+int cmd_stop(ThisPeer *peer, int argc, char **argv)
 {
     return -1;
 }
@@ -205,14 +211,14 @@ int cmd_stop(Peer *peer, int argc, char **argv)
 
 char *cmd_str[NUM_CMDS] = { "start", "add", "get", "stop" };
 
-int (*cmd_func[NUM_CMDS])(Peer*, int, char**) = 
+int (*cmd_func[NUM_CMDS])(ThisPeer*, int, char**) = 
     { &cmd_start, &cmd_add, &cmd_get, &cmd_stop };
 
 
 
 /* ########## DEMULTIPLEXING ########## */
 
-void demux_user_input(Peer *peer)
+void demux_user_input(ThisPeer *peer)
 {
     int i, argc;
     char **argv;
@@ -240,13 +246,13 @@ void demux_user_input(Peer *peer)
     free_command_line(argc, argv);
 }
 
-void demux_peer_request(Peer *peer, int sd)
+void demux_peer_request(ThisPeer *peer, int sd)
 {
     printf("demultiplexing peer request\n");
 }
 
 
-void demux_server_request(Peer *peer)
+void demux_server_request(ThisPeer *peer)
 {
     /* TODO actually demultiplex */
 
@@ -271,13 +277,40 @@ void demux_server_request(Peer *peer)
         return;
     }
 
-    printf("received type %d\nbody length %d\n%s\n", msg.type, msg.body_len, msg.body);
+    printf("received type %d\nbody length %d\n", msg.type, msg.body_len);
 
     if (msg.type == MSG_SET_NBRS)
     {
-        if (peer->state != STATE_STARTING) return;
+        if (peer->state == STATE_OFF) return;
 
-        printf("SETTING NEIGHBORS\n");
+        if (peer->state == STATE_STARTING)
+        {
+            printf("SETTING NEIGHBORS\n");
+
+            close(peer->dserver);
+
+            peer->dserver = socket(AF_INET, SOCK_DGRAM, 0);
+            if (peer->dserver == -1) 
+            {
+                perror("socket error");
+                return;
+            }
+
+            ret = bind(peer->dserver, (struct sockaddr*)&peer->addr, sizeof(peer->addr));
+            if (ret == -1)
+            {
+                perror("bind error");
+            }
+        }
+        else
+        {
+            printf("RESETTING NEIGHBORS\n");
+        }
+
+        /* TODO free properly old list of peers */
+        peer->neighbors.first = peer->neighbors.last = NULL;
+        deserialize_peers(msg.body, &peer->neighbors.first);
+        print_peers(peer->neighbors.first);
 
         peer->state = STATE_STARTED;
 
@@ -290,7 +323,7 @@ void demux_server_request(Peer *peer)
 
 int main(int argc, char** argv)
 {
-    Peer peer;
+    ThisPeer peer;
     fd_set working_set;
     int ret, i, desc_ready;
 

@@ -3,7 +3,7 @@
 #include <string.h>
 
 /**
- * @brief Create a peer object
+ * @brief Create a peer object.
  * 
  * @param addr peer address
  * @return pointer to created peer object 
@@ -18,7 +18,7 @@ Peer *create_peer(struct sockaddr_in *addr)
 }
 
 /**
- * @brief Create a graph node object
+ * @brief Create a graph node object.
  * 
  * @param peer node's peer
  * @param next next node in list
@@ -56,75 +56,36 @@ Graph *create_graph(Graph *graph)
 }
 
 /**
+ * @brief Compare two struct sockaddr_in.
+ * 
+ * @param a 
+ * @param b 
+ * @return true if a and b have same address and port
+ */
+bool addr_equals(struct sockaddr_in *a, struct sockaddr_in *b)
+{
+    return a->sin_port == b->sin_port &&
+           a->sin_addr.s_addr == b->sin_addr.s_addr;
+}
+
+/**
  * @brief Compare two peers
  * 
  * @param a 
  * @param b 
  * @return true if a and b have same address and port
  */
-bool peer_equals(Peer *a, Peer *b) /* NEW */
+bool peer_equals(Peer *a, Peer *b)
 {
     if (a == NULL || b == NULL) return false;
-
-    return a->addr.sin_port == b->addr.sin_port &&
-           a->addr.sin_addr.s_addr == b->addr.sin_addr.s_addr;
+    return addr_equals(&a->addr, &b->addr);
 }
 
 /**
- * @brief Search node in list given peer.
- * 
- * Linearly search through peer list, returing the pointer to the node in the
- * list if it's present, NULL otherwise. If prec is not NULL, it will be set
- * to the preceding node or to NULL if the node found is the first or no node
- * is found.
- * 
- * @param nodes list of nodes to search through
- * @param peer peer to search
- * @param prec pointer to where to store pointer to preceding node
- * @return graph node if peer is found, NULL otherwise
- */
-/* GraphNode *search_peer_node(GraphNode *nodes, Peer *peer, GraphNode **prec)
-{
-    if (nodes == NULL)
-        return NULL;
-
-    if (peer_equals(nodes->peer, peer))
-        return nodes;
-
-    if (prec != NULL)
-        *prec = nodes;
-
-    return search_peer_node(nodes->next, peer, prec);
-} */
-
-/**
- * Search node in list given peer's port.
- * 
- * Like search_peer_node.
- * 
- * @param nodes list of nodes to search through
- * @param port port to search
- * @param prec pointer to where to store pointer to preceding node
- * @return graph node if peer is found, NULL otherwise
- */
-/* GraphNode *search_peer_node_by_port(GraphNode *nodes, in_port_t port, GraphNode **prec)
-{
-    if (nodes == NULL)
-        return NULL;
-
-    if (nodes->peer->addr->sin_port == port)
-        return nodes;
-
-    if (prec != NULL)
-        *prec = nodes;
-
-    return search_peer_node_by_port(nodes->next, port, prec);
-} */
-
-/**
  * Search node in list given peer's address and port.
- * 
- * Like search_peer_node.
+ * Linearly search through the list of peers returning a pointer to the node
+ * in the list if the peer is found. If peer is not found, NULL is returned.
+ * If prec is not NULL, prec is set to point to the node preceding the found one.
  * 
  * @param nodes list of nodes to search through
  * @param port port to search
@@ -136,8 +97,7 @@ GraphNode *search_peer_node_by_addr(GraphNode *nodes, struct sockaddr_in *addr, 
     if (nodes == NULL)
         return NULL;
 
-    if (nodes->peer->addr.sin_addr.s_addr == addr->sin_addr.s_addr &&
-        nodes->peer->addr.sin_port == addr->sin_port)
+    if (addr_equals(&nodes->peer->addr, addr))
         return nodes;
 
     if (prec != NULL)
@@ -167,6 +127,7 @@ Peer *add_peer(Graph *graph, struct sockaddr_in *addr)
 
     peer = create_peer(addr);
     node = create_node(peer, NULL);
+    peer->node = node;
 
     if (graph->first == NULL)
         graph->first = node;
@@ -223,7 +184,14 @@ void add_neighbor_front(GraphNode **nbr_list, Peer *peer, GraphNode *parent)
     }
 }
 
-
+/**
+ * Remove node from the list.
+ * 
+ * @param nodes list of nodes
+ * @param node node to be removed
+ * @param prec node preceding the one to be removed (if NULL, node is assumed
+ * to be the first node in the list)
+ */
 void remove_node_from_list(GraphNode **nodes, GraphNode *node, GraphNode *prec)
 {
     if (prec == NULL) /* first element in the list */
@@ -286,7 +254,6 @@ GraphNode *remove_peer(Graph *nodes, struct sockaddr_in *addr)
     GraphNode *node, *nbr, *tmp, *prec;
 
     /* remove peer from list of peers */
-    /* node = remove_peer_from_list(&nodes->first, peer, &prec); */
     node = search_peer_node_by_addr(
         nodes->first, addr, &prec
     );
@@ -305,7 +272,6 @@ GraphNode *remove_peer(Graph *nodes, struct sockaddr_in *addr)
     while (nbr)
     {
         /* remove the peer from nbr's list of neighbors */
-        /* tmp = remove_peer_from_list(&nbr->parent->neighbors, peer, NULL); */
         tmp = remove_peer_from_list(&nbr->parent->neighbors, &node->peer->addr, NULL);
 
         if (tmp != NULL)
@@ -321,8 +287,16 @@ GraphNode *remove_peer(Graph *nodes, struct sockaddr_in *addr)
     return nbr;
 }
 
-
-void set_neighbors_nodes(Graph *graph, GraphNode *a, GraphNode *b, bool back)
+/**
+ * Set two peers as neighbors.
+ * 
+ * @param graph 
+ * @param a graph node pointer of first peer
+ * @param b graph node pointer of second peer
+ * @param back if true, each peer's node will be placed at the back
+ * of the other peer's list of neighbors
+ */
+void set_neighbors(Graph *graph, GraphNode *a, GraphNode *b, bool back)
 {
     if (back)
     {
@@ -336,71 +310,17 @@ void set_neighbors_nodes(Graph *graph, GraphNode *a, GraphNode *b, bool back)
     }
 }
 
-void unset_neighbors_nodes(Graph *graph, GraphNode *a, GraphNode *b)
-{
-    remove_neighbor(a, b->peer);
-    remove_neighbor(b, a->peer);
-}
-
-
-/**
- * Set two peers as neighbors.
- * 
- * @param graph 
- * @param a 
- * @param b 
- * @param back if true, each peer's node will be placed at the back
- * of the other peer's list of neighbors
- */
-void set_neighbors(Graph *graph, Peer *a, Peer *b, bool back)
-{
-    GraphNode *node_a, *node_b;
-
-    node_a = search_peer_node_by_addr(graph->first, &a->addr, NULL);
-    if (node_a == NULL)
-        return;
-
-    node_b = search_peer_node_by_addr(graph->first, &b->addr, NULL);
-    if (node_b == NULL)
-        return;
-
-    set_neighbors_nodes(graph, node_a, node_b, back);
-
-    /* if (back)
-    {
-        add_neighbor_back(&node_a->neighbors, b, node_b);
-        add_neighbor_back(&node_b->neighbors, a, node_a);
-    }
-    else
-    {
-        add_neighbor_front(&node_a->neighbors, b, node_b);
-        add_neighbor_front(&node_b->neighbors, a, node_a);
-    } */
-}
-
 /**
  * Unset neighborhood for the specified peers.
  * 
  * @param graph 
- * @param a 
- * @param b 
+ * @param a graph node pointer of first peer
+ * @param b graph node pointer of second peer
  */
-void unset_neighbors(Graph *graph, Peer *a, Peer *b)
+void unset_neighbors(Graph *graph, GraphNode *a, GraphNode *b)
 {
-    GraphNode *node_a, *node_b;
-
-    node_a = search_peer_node_by_addr(graph->first, &a->addr, NULL);
-    if (node_a == NULL)
-        return;
-
-    node_b = search_peer_node_by_addr(graph->first, &b->addr, NULL);
-    if (node_b == NULL)
-        return;
-    
-    unset_neighbors_nodes(graph, node_a, node_b);
-
-    /* remove_neighbor(node_a, b);
-    remove_neighbor(node_b, a); */
+    remove_neighbor(a, b->peer);
+    remove_neighbor(b, a->peer);
 }
 
 /**
@@ -413,7 +333,7 @@ void print_peers(GraphNode *nodes)
     printf("[");
     while (nodes)
     {
-        printf("%d", nodes->peer->addr.sin_port);
+        printf("%d", ntohs(nodes->peer->addr.sin_port));
         if ((nodes = nodes->next) != NULL)
             printf(", ");
     }
@@ -431,7 +351,7 @@ void print_graph(Graph *graph)
     printf("{\n");
     while (node)
     {
-        printf("peer: %d; nbrs: ", node->peer->addr.sin_port);
+        printf("peer: %d; nbrs: ", ntohs(node->peer->addr.sin_port));
         print_peers(node->neighbors);
         node = node->next;
     }
@@ -443,7 +363,7 @@ char *serialize_peers(char *buffer, GraphNode *nodes)
     char *buf_start = buffer;
     int counter = 0;
 
-    buffer += sizeof (int32_t);
+    buffer += sizeof(int32_t);
     
     while (nodes)
     {
@@ -453,7 +373,7 @@ char *serialize_peers(char *buffer, GraphNode *nodes)
         *(in_addr_t*)buffer = htonl(nodes->peer->addr.sin_addr.s_addr);
         buffer += sizeof(in_addr_t);
 
-        *(in_port_t*)buffer = htonl(nodes->peer->addr.sin_port); 
+        *(in_port_t*)buffer = htons(nodes->peer->addr.sin_port); 
         buffer += sizeof(in_port_t);
 
         counter++;
@@ -468,29 +388,42 @@ char *serialize_peers(char *buffer, GraphNode *nodes)
 void deserialize_peers(char *buffer, GraphNode **nodes)
 {
     Peer *peer;
-    /* GraphNode *last = *nodes; */
+    GraphNode *prec;
     struct sockaddr_in addr;
     int32_t qty;
 
     memset(&addr, 0, sizeof(struct sockaddr_in));
     addr.sin_family = AF_INET;
 
-    qty = *(int32_t*)buffer;
+    qty = ntohl(*(int32_t*)buffer);
     buffer += sizeof(int32_t);
 
+    printf("qty: %d\n", qty);
+    fflush(stdout);
+
     while (*nodes != NULL)
-        *nodes = (*nodes)->next;
+        nodes = &(*nodes)->next;
+
+    prec = *nodes;
 
     while (qty > 0)
     {
         addr.sin_addr.s_addr = ntohl(*(in_addr_t*)buffer);
         buffer += sizeof(in_addr_t);
 
-        addr.sin_port = ntohl(*(in_port_t*)buffer);
+        addr.sin_port = ntohs(*(in_port_t*)buffer);
         buffer += sizeof(in_port_t);
+
+        printf("adding %d %d\n", addr.sin_addr.s_addr, addr.sin_port);
+        fflush(stdout);
 
         peer = create_peer(&addr);
         *nodes = create_node(peer, NULL);
+
+        if (prec != NULL)
+            prec->next = *nodes;
+
+        nodes = &(*nodes)->next;
 
         qty--;
     }

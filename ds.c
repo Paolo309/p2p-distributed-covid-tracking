@@ -31,9 +31,21 @@ int validate_port(const char *str_port)
 }
 
 
-void tell_neighbors(Graph *graph, Peer *peer)
+void tell_neighbors(int sd, struct sockaddr_in *addr, Peer *peer)
 {
-    
+    int ret;
+    Message msg;
+
+    printf("telling to %d\n", ntohs(addr->sin_port));
+
+    msg.type = MSG_SET_NBRS;
+    msg.body_len = serialize_peers(msg.body, peer->node->neighbors) - msg.body;
+
+    ret = send_message_to(sd, &msg, addr);
+    if (ret == -1)
+    {
+        printf("error on sending neighbors\n");
+    }
 }
 
 
@@ -43,10 +55,11 @@ int main(int argc, char** argv)
     struct sockaddr_in *tmp_addr;
     Message msg;
     int ret, i, sd;
+    in_port_t tmp_port;
 
     Graph peers;
     Peer *new_peer, *old_last;
-    GraphNode *removed_node, *prec_node, *next_node;
+    GraphNode *removed_node, *prec_node, *next_node, *node_p;
 
     if (argc != 2)
     {
@@ -95,22 +108,21 @@ int main(int argc, char** argv)
             get somehow list of modified neighbors lists
             send to each interested peer the new list of neighbors */
 
-
-            tmp_addr = malloc(sizeof(struct sockaddr_in));
-            *tmp_addr = client_addr;
-            /* TODO put new port */
-
-            old_last = NULL;
             if (peers.last != NULL)
                 old_last = peers.last->peer;
-            
-            new_peer = add_peer(&peers, tmp_addr);
+            else
+                old_last = NULL;
 
-            /* the peer was already present */
-            if (new_peer == NULL) 
+            tmp_port = client_addr.sin_port;
+            client_addr.sin_port = *(in_port_t*)msg.body;
+
+            new_peer = add_peer(&peers, &client_addr);
+            
+            client_addr.sin_port = tmp_port;
+
+            if (new_peer == NULL)
             {
-                printf("peer already present");
-                free(tmp_addr);
+                printf("peer already present\n");
                 goto done;
             }
 
@@ -118,6 +130,9 @@ int main(int argc, char** argv)
             if (old_last == NULL)
             {
                 printf("only one peer present\n");
+
+                tell_neighbors(sd, &client_addr, new_peer);
+
                 goto done;
             }
 
@@ -125,17 +140,25 @@ int main(int argc, char** argv)
             if (!peer_equals(peers.first->next->peer, old_last))
             {
                 printf("more than two peers present\n");
-                unset_neighbors(&peers, peers.first->peer, old_last);
+                unset_neighbors(&peers, peers.first->peer->node, old_last->node);
             }
 
             /* connect new peer to second-last */
-            set_neighbors(&peers, new_peer, old_last, PUSH_FRONT);
+            set_neighbors(&peers, new_peer->node, old_last->node, PUSH_FRONT);
             /* connect new peer with first peer */
-            set_neighbors(&peers, peers.first->peer, new_peer, PUSH_FRONT);
-            /* set_neighbors(&peers, peers.first->peer, peers.last->peer, false); */
+            set_neighbors(&peers, peers.first, new_peer->node, PUSH_FRONT);
 
             /* need to inform: old_last, new_peer and peers.first->peer */
-            print_graph(&peers);
+            /* print_graph(&peers); */
+
+            tell_neighbors(sd, &client_addr, new_peer);
+
+            node_p = new_peer->node->neighbors;
+            while (node_p)
+            {
+                tell_neighbors(sd, &node_p->peer->addr, node_p->peer);
+                node_p = node_p->next;
+            }
         }
         else if (msg.type == MSG_STOP)
         {
@@ -143,8 +166,16 @@ int main(int argc, char** argv)
             add peer to graph
             get somehow list of modified neighbors lists
             send to each interested peer the new list of neighbors */
+            
+            /* save source port for later use */
+            tmp_port = client_addr.sin_port;
+            /* set client addr port to the value used to identify the peer */
+            client_addr.sin_port = *(in_port_t*)msg.body;
 
             removed_node = remove_peer(&peers, &client_addr);
+
+            /* reset source port */
+            client_addr.sin_port = tmp_port;
 
             if (removed_node == NULL)
             {
@@ -155,91 +186,27 @@ int main(int argc, char** argv)
             printf("peer's neighbors: ");
             print_peers(removed_node->neighbors);
             
-            prec_node = removed_node->neighbors->parent;
-            next_node = removed_node->neighbors->next->parent;
-            
-            set_neighbors_nodes(&peers, prec_node, next_node, PUSH_FRONT);
+            if (peers.first != peers.last)
+            {
+                prec_node = removed_node->neighbors->parent;
+                next_node = removed_node->neighbors->next->parent;
 
-            print_graph(&peers);
+                set_neighbors(&peers, prec_node, next_node, PUSH_FRONT);
+            }
+            else
+            {
+                printf("no more peers to connect\n");
+            }            
+
+            /* print_graph(&peers); */
         }
         else {
             printf("request received is not supported\n");
         }
 
 done:
-
+        printf("DONE\n");
+        print_graph(&peers);
     }
 }
 
-
-
-
-
-
-
-
-int fake_main(int argc, char** argv)
-{
-    int ret, sd;
-
-    struct sockaddr_in my_addr, client_addr;
-    in_port_t my_port;
-
-    Message msg;
-
-    if (argc != 2)
-    {
-        printf("usage: ./peer <porta>\n");
-        exit(1);
-    }
-
-    my_port = atoi(argv[1]);
-
-    memset(&my_addr, 0, sizeof(my_addr));
-    my_addr.sin_family = AF_INET;
-    my_addr.sin_port = htons(my_port);
-    my_addr.sin_addr.s_addr = INADDR_ANY;
-
-    sd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sd == -1)
-    {
-        perror("main() -> socket() FAIL");
-        exit(EXIT_FAILURE);
-    }
-
-    ret = bind(sd, (struct sockaddr*)&my_addr, sizeof(my_addr));
-    if (ret == -1)
-    {
-        perror("main() -> bind() FAIL");
-        exit(EXIT_FAILURE);
-    }
-
-    printf("DISCOVERY SERVER %d\n", my_port);
-    
-    for (;;)
-    {
-        ret = recv_message_from(sd, &msg, &client_addr);
-
-        if (ret == -1)
-        {
-            printf("Error on receiving message\n");
-            continue;
-        }
-
-        msg.type = MSG_SET_NBRS;
-        sprintf(msg.body, "Hi %d, this is %d", client_addr.sin_port, my_addr.sin_port);
-        msg.body_len = strlen(msg.body) + 1;
-
-        sleep(4);
-
-        ret = send_message_to(sd, &msg, &client_addr);
-
-        if (ret == -1)
-        {
-            printf("Error on sending message\n");
-            continue;
-        }
-    }
-
-    return 0;
-}

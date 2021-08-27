@@ -11,6 +11,7 @@
 
 typedef struct Peer {
     struct sockaddr_in addr;
+    struct GraphNode *node;
 } Peer;
 
 typedef struct GraphNode {
@@ -31,10 +32,9 @@ Peer *create_peer(struct sockaddr_in *addr);
 GraphNode *create_node(Peer *peer, GraphNode *next);
 Graph *create_graph(Graph *graph);
 
+bool addr_equals(struct sockaddr_in *a, struct sockaddr_in *b);
 bool peer_equals(Peer *a, Peer *b);
 
-/* GraphNode *search_peer_node(GraphNode *nodes, Peer *peer, GraphNode **prec); */
-/* GraphNode *search_peer_node_by_port(GraphNode *nodes, in_port_t port, GraphNode **prec); */
 GraphNode *search_peer_node_by_addr(GraphNode *nodes, struct sockaddr_in *addr, GraphNode **prec);
 
 Peer *add_peer(Graph *graph, struct sockaddr_in *addr);
@@ -48,11 +48,8 @@ GraphNode *remove_peer_from_list(GraphNode **nodes, struct sockaddr_in *addr, Gr
 void remove_neighbor(GraphNode *node, Peer *peer);
 GraphNode *remove_peer(Graph *nodes, struct sockaddr_in *addr);
 
-void set_neighbors_nodes(Graph *graph, GraphNode *a, GraphNode *b, bool back);
-void unset_neighbors_nodes(Graph *graph, GraphNode *a, GraphNode *b);
-
-void set_neighbors(Graph *graph, Peer *a, Peer *b, bool back);
-void unset_neighbors(Graph *graph, Peer *a, Peer *b);
+void set_neighbors(Graph *graph, GraphNode *a, GraphNode *b, bool back);
+void unset_neighbors(Graph *graph, GraphNode *a, GraphNode *b);
 
 void print_peers(GraphNode *nodes);
 void print_graph(Graph *graph);
