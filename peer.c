@@ -111,8 +111,7 @@ int send_start_msg_to_dserver(ThisPeer *peer)
     int ret;
 
     msg.type = MSG_START;
-    *(in_port_t*)msg.body = peer->addr.sin_port;
-    msg.body_len = sizeof(in_port_t);
+    msg.body_len = 0;
 
     ret = send_message(peer->dserver, &msg);
     if (ret == -1)
@@ -149,6 +148,8 @@ int cmd_start(ThisPeer *peer, int argc, char **argv)
         return 0;
     }
 
+    /* reading the arguments (address and port) */
+
     if (argc != 3)
     {
         printf("usage: %s <address> <port>\n", argv[0]);
@@ -171,6 +172,8 @@ int cmd_start(ThisPeer *peer, int argc, char **argv)
 
     server_addr.sin_port = htons(ret);
 
+    /* creating and connecting UDP socket */
+
     peer->dserver = socket(AF_INET, SOCK_DGRAM, 0);
     if (peer->dserver == -1)
     {
@@ -178,6 +181,11 @@ int cmd_start(ThisPeer *peer, int argc, char **argv)
         return -1;
     }
 
+    /* binding the socket to the port assigned to this peer lets the server
+    know the port assigned to this peer by the user, and allows an easier
+    management of communication between server and peer, both server-side
+    and client-side */
+    /* N.B. a TCP and a UDP socket can be bound to the same port */
     ret = bind(peer->dserver, (struct sockaddr*)&peer->addr, sizeof(peer->addr));
     if (ret == -1)
     {
@@ -206,7 +214,23 @@ int cmd_get(ThisPeer *peer, int argc, char **argv)
 
 int cmd_stop(ThisPeer *peer, int argc, char **argv)
 {
-    return -1;
+    Message msg;
+    int ret;
+
+    msg.type = MSG_STOP;
+    msg.body_len = 0;
+
+    ret = send_message(peer->dserver, &msg);
+
+    if (ret == -1)
+    {
+        printf("could not send stop message to discovery server\n");
+        return -1;
+    }
+
+    /* TODO send all records to other peers */
+
+    return 0;
 }
 
 #define NUM_CMDS 4

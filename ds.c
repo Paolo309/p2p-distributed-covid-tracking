@@ -52,14 +52,14 @@ void tell_neighbors(int sd, struct sockaddr_in *addr, Peer *peer)
 int main(int argc, char** argv)
 {
     struct sockaddr_in my_addr, client_addr;
-    struct sockaddr_in *tmp_addr;
+    /* struct sockaddr_in *tmp_addr; */
     Message msg;
-    int ret, i, sd;
-    in_port_t tmp_port;
+    int ret, sd;
+    /* in_port_t tmp_port; */
 
     Graph peers;
     Peer *new_peer, *old_last;
-    GraphNode *removed_node, *prec_node, *next_node, *node_p;
+    GraphNode *neighbors, *prec_node, *next_node, *node_p;
 
     if (argc != 2)
     {
@@ -113,12 +113,12 @@ int main(int argc, char** argv)
             else
                 old_last = NULL;
 
-            tmp_port = client_addr.sin_port;
-            client_addr.sin_port = *(in_port_t*)msg.body;
+            /* tmp_port = client_addr.sin_port;
+            client_addr.sin_port = *(in_port_t*)msg.body; */
 
             new_peer = add_peer(&peers, &client_addr);
             
-            client_addr.sin_port = tmp_port;
+            /* client_addr.sin_port = tmp_port; */
 
             if (new_peer == NULL)
             {
@@ -168,30 +168,39 @@ int main(int argc, char** argv)
             send to each interested peer the new list of neighbors */
             
             /* save source port for later use */
-            tmp_port = client_addr.sin_port;
+            /* tmp_port = client_addr.sin_port; */
             /* set client addr port to the value used to identify the peer */
-            client_addr.sin_port = *(in_port_t*)msg.body;
+            /* client_addr.sin_port = *(in_port_t*)msg.body; */
 
-            removed_node = remove_peer(&peers, &client_addr);
+            printf("removing node\n");
+            fflush(stdout);
+
+            neighbors = remove_peer(&peers, &client_addr);
 
             /* reset source port */
-            client_addr.sin_port = tmp_port;
+            /* client_addr.sin_port = tmp_port; */
 
-            if (removed_node == NULL)
+            if (neighbors == NULL)
             {
                 printf("peer was not connected\n");
+                fflush(stdout);
                 goto done;
             }
 
-            printf("peer's neighbors: ");
-            print_peers(removed_node->neighbors);
+            printf("peer's neighbors (%d): ", ntohs(client_addr.sin_port));
+            fflush(stdout);
+            print_peers(neighbors);
             
             if (peers.first != peers.last)
             {
-                prec_node = removed_node->neighbors->parent;
-                next_node = removed_node->neighbors->next->parent;
+                prec_node = neighbors;
+                printf("%p\n", (void*)prec_node);
+                fflush(stdout);
+                next_node = neighbors->next;
+                printf("%p\n", (void*)next_node);
+                fflush(stdout);
 
-                set_neighbors(&peers, prec_node, next_node, PUSH_FRONT);
+                set_neighbors(&peers, prec_node->parent, next_node->parent, PUSH_FRONT);
             }
             else
             {
