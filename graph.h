@@ -10,7 +10,7 @@
 #define PUSH_BACK false
 
 typedef struct Peer {
-    struct sockaddr_in *addr;
+    struct sockaddr_in addr;
 } Peer;
 
 typedef struct GraphNode {
@@ -56,5 +56,8 @@ void unset_neighbors(Graph *graph, Peer *a, Peer *b);
 
 void print_peers(GraphNode *nodes);
 void print_graph(Graph *graph);
+
+char *serialize_peers(char *buffer, GraphNode *nodes);
+void deserialize_peers(char *buffer, GraphNode **nodes);
 
 #endif

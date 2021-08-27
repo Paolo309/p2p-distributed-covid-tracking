@@ -31,7 +31,10 @@ int validate_port(const char *str_port)
 }
 
 
-
+void tell_neighbors(Graph *graph, Peer *peer)
+{
+    
+}
 
 
 int main(int argc, char** argv)
@@ -95,6 +98,7 @@ int main(int argc, char** argv)
 
             tmp_addr = malloc(sizeof(struct sockaddr_in));
             *tmp_addr = client_addr;
+            /* TODO put new port */
 
             old_last = NULL;
             if (peers.last != NULL)
@@ -163,14 +167,7 @@ int main(int argc, char** argv)
         }
 
 done:
-        msg.type = MSG_SET_NBRS;
-        msg.body_len = 1 + sprintf(msg.body, "SERVER OK");
 
-        ret = send_message_to(sd, &msg, &client_addr);
-        if (ret == -1)
-        {
-            perror("send error");
-        }
     }
 }
 
