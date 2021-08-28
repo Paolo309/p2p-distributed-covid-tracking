@@ -31,6 +31,17 @@ void time_to_str(char *str, time_t *time)
 /**
  * Create a new entry.
  * 
+ */
+Entry *create_entry_empty()
+{
+    Entry *tmp = malloc(sizeof(Entry));
+    memset(tmp, 0, sizeof(Entry));
+    return tmp;
+}
+
+/**
+ * Create a new entry.
+ * 
  * @param timestamp 
  * @param tamponi 
  * @param nuovi_casi 
@@ -439,12 +450,91 @@ void print_entries_dsc(EntryList *list)
     }
 }
 
+char *serialize_entries(char *buffer, EntryList *list)
+{
+    int32_t count;
+    char *start_buffer;
+    Entry *entry;
+
+    start_buffer = buffer;
+    buffer += sizeof(int32_t);
+
+    count = 0;
+    entry = list->first;
+
+    while (entry)
+    {
+        *(time_t*)buffer = entry->timestamp;
+        buffer += sizeof(time_t);
+
+        *((int32_t*)buffer + 0) = entry->flags;
+        *((int32_t*)buffer + 1) = entry->tamponi;
+        *((int32_t*)buffer + 2) = entry->nuovi_casi;
+        *((int32_t*)buffer + 3) = entry->period_len;
+
+        buffer += 4 * sizeof(int32_t);
+
+        count++;
+        entry = entry->next;
+    }
+
+    *(int32_t*)start_buffer = count;
+
+    return buffer;
+}
+
+char *deserialize_entries(char *buffer, EntryList *list)
+{
+    int32_t count;
+    Entry *entry, *prec;
+
+    count = *(int32_t*)buffer;
+    buffer += sizeof(int32_t);
+
+    init_entry_list(list);
+
+    entry = NULL;
+    prec = NULL;
+
+    while (count > 0)
+    {
+        entry = create_entry_empty();
+
+        entry->timestamp = *(time_t*)buffer;
+        buffer += sizeof(time_t);
+
+        entry->flags      = *((int32_t*)buffer + 0);
+        entry->tamponi    = *((int32_t*)buffer + 1);
+        entry->nuovi_casi = *((int32_t*)buffer + 2);
+        entry->period_len = *((int32_t*)buffer + 3);
+
+        buffer += 4 * sizeof(int32_t);
+
+        entry->prev = prec;
+
+        if (list->first == NULL)
+            list->first = entry;
+
+        if (prec != NULL)
+            prec->next = entry;
+
+        count--;
+        prec = entry;
+    }
+
+    list->last = entry;
+
+    return buffer;
+}
+
 int main_test()
 {
     EntryList entries, others;
     Entry *tmp;    
     time_t tmp_time;
-    
+    char buff[1024];
+    char buff2[1024];
+
     init_entry_list(&entries);
     init_entry_list(&others);
     
@@ -476,6 +566,13 @@ int main_test()
     
     printf("others\n");
     print_entries_asc(&others);
+
+    serialize_entries(buff, &entries);
+    memcpy(buff2, buff, 1024);
+    deserialize_entries(buff2, &others);
+    printf("deserialized\n");
+    print_entries_asc(&others);
+
     
     /* printf("\n\nentries dsc\n");
     print_entries_dsc(&entries);

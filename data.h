@@ -76,6 +76,7 @@ typedef struct EntryList {
 
 time_t str_to_time(const char *str);
 void time_to_str(char *str, time_t *time);
+Entry *create_entry_empty();
 Entry *create_entry(time_t timestamp, int32_t tamponi, int32_t nuovi_casi, uint8_t flags);
 int cmp_entries(const Entry *a, const Entry *b);
 
@@ -95,5 +96,7 @@ void print_entry(Entry *entry);
 void print_entries_asc(EntryList *list);
 void print_entries_dsc(EntryList *list);
 
+char *serialize_entries(char *buffer, EntryList *list);
+char *deserialize_entries(char *buffer, EntryList *list);
 
 #endif
