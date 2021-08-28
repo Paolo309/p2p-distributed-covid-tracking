@@ -6,6 +6,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
+#define __USE_XOPEN
+#include <time.h>
 
 #define FNAME_REGISTER "register.txt"
 #define TIMESTAMP_STRLEN 11
@@ -57,7 +59,7 @@ existing one is local (SCOPE_LOCAL).
 #define AGGREG_PERIOD 4
 
 typedef struct Entry {
-    char timestamp[11];
+    time_t timestamp;
     int32_t flags;
     int32_t tamponi;
     int32_t nuovi_casi;
@@ -72,7 +74,7 @@ typedef struct EntryList {
     Entry *last;
 } EntryList;
 
-Entry *create_entry(char* timestamp, int32_t tamponi, int32_t nuovi_casi, uint8_t flags);
+Entry *create_entry(const char* str_time, int32_t tamponi, int32_t nuovi_casi, uint8_t flags);
 int cmp_entries(const Entry *a, const Entry *b);
 
 void init_entry_list(EntryList *list);

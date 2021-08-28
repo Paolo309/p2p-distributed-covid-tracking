@@ -9,16 +9,21 @@
  * @param flags Either SCOPE_LOCAL or ENTRY_GLOBAL
  * @return The new entry
  */
-Entry *create_entry(char* timestamp, int32_t tamponi, int32_t nuovi_casi, uint8_t flags)
+Entry *create_entry(const char* str_time, int32_t tamponi, int32_t nuovi_casi, uint8_t flags)
 {
+    struct tm time = { 0 };
     Entry* tmp = malloc(sizeof(Entry));
-    
-    strncpy(tmp->timestamp, timestamp, TIMESTAMP_STRLEN);
+
+    strptime(str_time, "%Y-%m-%d", &time);
+
+    tmp->timestamp = mktime(&time);
+
     tmp->tamponi = tamponi;
     tmp->nuovi_casi = nuovi_casi;
     tmp->flags = flags;
     tmp->prev = tmp->next = NULL;
-    
+    tmp->period_len = 0;
+
     return tmp;
 }
 
@@ -39,7 +44,7 @@ int cmp_entries(const Entry *a, const Entry *b)
 {
     int cmp_res;
     
-    cmp_res = strcmp(a->timestamp, b->timestamp);
+    cmp_res = a->timestamp - b->timestamp;
     if (cmp_res != 0)
         return cmp_res;
 
@@ -327,9 +332,31 @@ void add_entry(EntryList *entries, Entry *entry)
 
 void print_entry(Entry *entry) 
 {
-    printf("[ %s ]\t", entry->timestamp);
+    struct tm *time;
+    time_t tmp_end_period;
+    char str_time[TIMESTAMP_STRLEN];
 
-    printf("(%d) ", entry->flags);
+    if (entry->flags & ENTRY_AGGREG)
+    {
+        time = localtime(&entry->timestamp);
+        strftime(str_time, TIMESTAMP_STRLEN, "%Y-%m-%d", time);
+        printf("[ %s ", str_time);
+
+        time->tm_mday += entry->period_len - 1;
+        tmp_end_period = mktime(time);
+
+        time = localtime(&tmp_end_period);
+        strftime(str_time, TIMESTAMP_STRLEN, "%Y-%m-%d", time);
+        printf("TO %s ] (%d days)", str_time, entry->period_len);
+    }
+    else
+    {
+        time = localtime(&entry->timestamp);
+        strftime(str_time, TIMESTAMP_STRLEN, "%Y-%m-%d", time);
+        printf("[ %s ]", str_time);
+    }
+
+    printf(" (flag: %d) ", entry->flags);
 
     if (entry->flags & TYPE_VARIATION)
         printf("VARIAZ. ");
@@ -344,9 +371,6 @@ void print_entry(Entry *entry)
     printf("\t");
 
     printf("tamponi: %d\tnuovi_casi: %d", entry->tamponi, entry->nuovi_casi);
-
-    if (entry->flags & ENTRY_AGGREG)
-        printf("\tperiodo: %d", entry->period_len);
     
     printf("\n");
 }
@@ -373,11 +397,10 @@ void print_entries_dsc(EntryList *list)
     }
 }
 
-int main_test()
+int main()
 {
     EntryList entries, others;
-    Entry *tmp;
-    
+    Entry *tmp;    
     
     init_entry_list(&entries);
     init_entry_list(&others);
@@ -390,7 +413,7 @@ int main_test()
     tmp = create_entry("2020-01-12", 100, 23, SCOPE_GLOBAL);
     add_entry(&others, tmp);
 
-    tmp = create_entry("2020-02-10", 200, 46, SCOPE_GLOBAL | TYPE_TOTAL);
+    tmp = create_entry("2020-02-07", 200, 46, SCOPE_LOCAL | TYPE_VARIATION);
     add_entry(&others, tmp);
 
     tmp = create_entry("2020-02-08", 2000, 460, SCOPE_GLOBAL | TYPE_TOTAL | AGGREG_PERIOD);
@@ -408,33 +431,14 @@ int main_test()
     printf("others\n");
     print_entries_asc(&others);
     
-    printf("\n\nentries dsc\n");
+    /* printf("\n\nentries dsc\n");
     print_entries_dsc(&entries);
     
     printf("others dsc\n");
-    print_entries_dsc(&others);
+    print_entries_dsc(&others); */
     
     /* tmp = create_entry("2020-02-09", 100, 23, ENTRY_LOCAL);
     add_entry(&others, tmp); */
-    
-    return 0;
-    
-    /* printf("DESC\n");
-    print_entries_dsc(&entries); */
-    
-    tmp = create_entry("2020-02-09", 100, 23, SCOPE_LOCAL);
-    
-    add_entry(&entries, tmp);
-    
-    tmp = create_entry("2020-02-10", 100, 0, SCOPE_GLOBAL);
-    
-    add_entry(&entries, tmp);
-    
-    printf("2\n");
-    print_entries_asc(&entries);
-    
-    printf("DESC\n");
-    print_entries_dsc(&entries);
     
     return 0;
 }
