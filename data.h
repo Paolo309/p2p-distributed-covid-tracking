@@ -74,8 +74,12 @@ typedef struct EntryList {
     Entry *last;
 } EntryList;
 
-Entry *create_entry(const char* str_time, int32_t tamponi, int32_t nuovi_casi, uint8_t flags);
+time_t str_to_time(const char *str);
+void time_to_str(char *str, time_t *time);
+Entry *create_entry(time_t timestamp, int32_t tamponi, int32_t nuovi_casi, uint8_t flags);
 int cmp_entries(const Entry *a, const Entry *b);
+
+time_t get_enf_of_period(Entry *entry);
 
 void init_entry_list(EntryList *list);
 void free_entry_list(EntryList *list);

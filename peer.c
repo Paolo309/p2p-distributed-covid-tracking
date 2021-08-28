@@ -217,7 +217,7 @@ int cmd_add(ThisPeer *peer, int argc, char **argv)
 {
     time_t now;
     struct tm *timeinfo;
-    char str_time[TIMESTAMP_STRLEN];
+    /* char str_time[TIMESTAMP_STRLEN]; */
     Entry *tmp_entry;
     int32_t tmp_tamponi, tmp_ncasi;
 
@@ -261,9 +261,9 @@ int cmd_add(ThisPeer *peer, int argc, char **argv)
     #endif
 
     /* TODO ugly: can directly pass time_t to create_entry */
-    strftime(str_time, TIMESTAMP_STRLEN, "%Y-%m-%d", timeinfo);
-
-    tmp_entry = create_entry(str_time, tmp_tamponi, tmp_ncasi, 0);
+    /* strftime(str_time, TIMESTAMP_STRLEN, "%Y-%m-%d", timeinfo); */
+    
+    tmp_entry = create_entry(mktime(timeinfo), tmp_tamponi, tmp_ncasi, 0);
     add_entry(&peer->entries, tmp_entry);
 
     print_entries_asc(&peer->entries);

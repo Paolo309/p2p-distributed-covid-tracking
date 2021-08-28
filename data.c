@@ -1,6 +1,34 @@
 #include "data.h"
 
 /**
+ * Convert a string representation of a date into a time_t value.
+ * The string must conform the ISO 8601 date format: "%Y-%m-%d",
+ * example: "2020-03-01" 
+ * 
+ * @param str 
+ * @return time_t representation of str
+ */
+time_t str_to_time(const char *str)
+{
+    struct tm time = { 0 };
+    strptime(str, "%Y-%m-%d", &time);
+    return mktime(&time);
+}
+
+/**
+ * Convert a time_t representation of a date into a string pointed by str.
+ * 
+ * @param str where to write the string
+ * @param time
+ */
+void time_to_str(char *str, time_t *time)
+{
+    struct tm *timeinfo;
+    timeinfo = localtime(time);
+    strftime(str, TIMESTAMP_STRLEN, "%Y-%m-%d", timeinfo);
+}
+
+/**
  * Create a new entry.
  * 
  * @param timestamp 
@@ -9,15 +37,11 @@
  * @param flags Either SCOPE_LOCAL or ENTRY_GLOBAL
  * @return The new entry
  */
-Entry *create_entry(const char* str_time, int32_t tamponi, int32_t nuovi_casi, uint8_t flags)
+Entry *create_entry(time_t timestamp, int32_t tamponi, int32_t nuovi_casi, uint8_t flags)
 {
-    struct tm time = { 0 };
     Entry* tmp = malloc(sizeof(Entry));
 
-    strptime(str_time, "%Y-%m-%d", &time);
-
-    tmp->timestamp = mktime(&time);
-
+    tmp->timestamp = timestamp;
     tmp->tamponi = tamponi;
     tmp->nuovi_casi = nuovi_casi;
     tmp->flags = flags;
@@ -57,6 +81,19 @@ int cmp_entries(const Entry *a, const Entry *b)
         return cmp_res;
 
     return a->period_len - b->period_len;
+}
+
+/**
+ * Sum to the entry's timestamp the number of days in period_len.
+ * 
+ * @param entry 
+ * @return the last day of the period stored in the entry
+ */
+time_t get_enf_of_period(Entry *entry)
+{
+    struct tm *time = localtime(&entry->timestamp);
+    time->tm_mday += entry->period_len - 1;
+    return mktime(time);
 }
 
 /**
@@ -108,7 +145,8 @@ void load_register_from_file(EntryList *entries, const char* file_name)
 {
     FILE *fp;
     Entry *tmp_entry, *prev;
-    char tmp_ts[TIMESTAMP_STRLEN];
+    char tmp_str_time[TIMESTAMP_STRLEN];
+    time_t tmp_time;
     int32_t flags;
     int32_t tmp_tamponi, tmp_ncasi;
     
@@ -119,8 +157,9 @@ void load_register_from_file(EntryList *entries, const char* file_name)
     
     tmp_entry = NULL;
 
-    while (fscanf(fp, "%s %d %d %d", tmp_ts, &flags, &tmp_tamponi, &tmp_ncasi) != EOF) {
-        tmp_entry = create_entry(tmp_ts, tmp_tamponi, tmp_ncasi, flags);
+    while (fscanf(fp, "%s %d %d %d", tmp_str_time, &flags, &tmp_tamponi, &tmp_ncasi) != EOF) {
+        tmp_time = str_to_time(tmp_str_time);
+        tmp_entry = create_entry(tmp_time, tmp_tamponi, tmp_ncasi, flags);
         
         if (tmp_entry->flags & ENTRY_AGGREG)  
             fscanf(fp, "%d", &tmp_entry->period_len);
@@ -338,15 +377,18 @@ void print_entry(Entry *entry)
 
     if (entry->flags & ENTRY_AGGREG)
     {
-        time = localtime(&entry->timestamp);
-        strftime(str_time, TIMESTAMP_STRLEN, "%Y-%m-%d", time);
+        /* time = localtime(&entry->timestamp);
+        strftime(str_time, TIMESTAMP_STRLEN, "%Y-%m-%d", time); */
+        time_to_str(str_time, &entry->timestamp);
         printf("[ %s ", str_time);
 
-        time->tm_mday += entry->period_len - 1;
+        /* time->tm_mday += entry->period_len - 1;
         tmp_end_period = mktime(time);
 
         time = localtime(&tmp_end_period);
-        strftime(str_time, TIMESTAMP_STRLEN, "%Y-%m-%d", time);
+        strftime(str_time, TIMESTAMP_STRLEN, "%Y-%m-%d", time); */
+        tmp_end_period = get_enf_of_period(entry);
+        time_to_str(str_time, &tmp_end_period);
         printf("TO %s ] (%d days)", str_time, entry->period_len);
     }
     else
@@ -401,6 +443,7 @@ int main_test()
 {
     EntryList entries, others;
     Entry *tmp;    
+    time_t tmp_time;
     
     init_entry_list(&entries);
     init_entry_list(&others);
@@ -410,13 +453,16 @@ int main_test()
     printf("entries\n");
     print_entries_asc(&entries);
     
-    tmp = create_entry("2020-01-12", 100, 23, SCOPE_GLOBAL);
+    tmp_time = str_to_time("2020-01-12");
+    tmp = create_entry(tmp_time, 100, 23, SCOPE_GLOBAL);
     add_entry(&others, tmp);
 
-    tmp = create_entry("2020-02-07", 200, 46, SCOPE_LOCAL | TYPE_VARIATION);
+    tmp_time = str_to_time("2020-02-07");
+    tmp = create_entry(tmp_time, 200, 46, SCOPE_LOCAL | TYPE_VARIATION);
     add_entry(&others, tmp);
 
-    tmp = create_entry("2020-02-08", 2000, 460, SCOPE_GLOBAL | TYPE_TOTAL | AGGREG_PERIOD);
+    tmp_time = str_to_time("2020-02-08");
+    tmp = create_entry(tmp_time, 2000, 460, SCOPE_GLOBAL | TYPE_TOTAL | AGGREG_PERIOD);
     tmp->period_len = 3;
     add_entry(&others, tmp);
     
