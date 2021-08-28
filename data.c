@@ -77,7 +77,7 @@ Entry *create_entry(time_t timestamp, int32_t tamponi, int32_t nuovi_casi, uint8
  * @return Returns a negative value if the first entry precedes the second; zero
  * if they are equal; a positive value otherwise.
  */
-int cmp_entries(const Entry *a, const Entry *b)
+int cmp_entries(Entry *a, Entry *b)
 {
     int cmp_res;
     
@@ -392,7 +392,7 @@ void print_entry(Entry *entry)
         /* time = localtime(&entry->timestamp);
         strftime(str_time, TIMESTAMP_STRLEN, "%Y-%m-%d", time); */
         time_to_str(str_time, &entry->timestamp);
-        printf("[ %s", str_time);
+        printf("%s", str_time);
 
         /* time->tm_mday += entry->period_len - 1;
         tmp_end_period = mktime(time);
@@ -401,20 +401,20 @@ void print_entry(Entry *entry)
         strftime(str_time, TIMESTAMP_STRLEN, "%Y-%m-%d", time); */
         tmp_end_period = get_enf_of_period(entry);
         time_to_str(str_time, &tmp_end_period);
-        printf("-%s ] (%d days)", str_time, entry->period_len);
+        printf("-%s (%d days)", str_time, entry->period_len);
     }
     else
     {
         /* time = localtime(&entry->timestamp);
         strftime(str_time, TIMESTAMP_STRLEN, "%Y-%m-%d", time); */
         time_to_str(str_time, &entry->timestamp);
-        printf("[ %s ] ", str_time);
+        printf("%s ", str_time);
     }
 
     printf(" (flag: %d) ", entry->flags);
 
     if (entry->flags & TYPE_VARIATION)
-        printf("VARIAZ. ");
+        printf("VARIA. ");
     else
         printf("TOTALE ");
 
@@ -423,7 +423,7 @@ void print_entry(Entry *entry)
     else
         printf("LOCALE");
 
-    printf("\t");
+    printf(" ");
 
     printf("t: %d\tc: %d", entry->tamponi, entry->nuovi_casi);
     
@@ -527,6 +527,25 @@ char *deserialize_entries(char *buffer, EntryList *list)
     list->last = entry;
 
     return buffer;
+}
+
+Entry *search_entry(Entry *from, time_t timestamp, int32_t flags, int32_t period_len)
+{
+    Entry *entry, *model;
+    char tmp[TIMESTAMP_STRLEN];
+
+    model = create_entry(timestamp, 0, 0, flags);
+    model->period_len = period_len;
+
+    entry = from;
+
+    while (entry)
+    {
+        if (cmp_entries(entry, model) == 0) break;
+        entry = entry->prev;
+    }
+
+    return entry;
 }
 
 int main_test()

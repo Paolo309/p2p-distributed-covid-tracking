@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <errno.h>
+#include <string.h>
 
 #include "network.h"
 #include "data.h"
@@ -210,8 +211,8 @@ int cmd_start(ThisPeer *peer, int argc, char **argv)
     return send_start_msg_to_dserver(peer);
 }
 
-#define ADD_TYPE_TAMPONI "t"
-#define ADD_TYPE_NCASI "c"
+#define TYPE_TAMPONI "t"
+#define TYPE_NCASI "c"
 
 int cmd_add(ThisPeer *peer, int argc, char **argv)
 {
@@ -229,11 +230,11 @@ int cmd_add(ThisPeer *peer, int argc, char **argv)
 
     tmp_tamponi = tmp_ncasi = 0;
 
-    if (strcmp(argv[1], ADD_TYPE_TAMPONI) == 0)
+    if (strcmp(argv[1], TYPE_TAMPONI) == 0)
     {
         tmp_tamponi = atoi(argv[2]);
     }
-    else if (strcmp(argv[1], ADD_TYPE_NCASI) == 0)
+    else if (strcmp(argv[1], TYPE_NCASI) == 0)
     {
         tmp_ncasi = atoi(argv[2]);
     }
@@ -273,9 +274,94 @@ int cmd_add(ThisPeer *peer, int argc, char **argv)
     return -1;
 }
 
+#define AGGREG_SUM "sum"
+#define AGGREG_VAR "var"
+
 int cmd_get(ThisPeer *peer, int argc, char **argv)
 {
-    return -1;
+    char *token, *str;
+    int ret, count;
+    time_t period[2];
+    int32_t period_len;
+    int32_t flags;
+    bool tamponi;
+    Entry *entry;
+
+    if (argc != 4)
+    {
+        printf("usage: %s <aggr> <type> <period>\n", argv[0]);
+        return -1;
+    }
+
+    while (--argc >= 0)
+    {
+        printf("arg[%d] = \"%s\"\n", argc, argv[argc]);
+    }
+
+    if (strcmp(argv[1], AGGREG_SUM) == 0)
+        flags = TYPE_TOTAL;
+    else if (strcmp(argv[1], AGGREG_VAR) == 0)
+        flags = TYPE_VARIATION;
+    else
+    {
+        printf("invalid aggr \"%s\"\n", argv[1]);
+        return -1;
+    }
+    flags |= AGGREG_PERIOD | SCOPE_GLOBAL;
+
+    if (strcmp(argv[2], TYPE_TAMPONI))
+        tamponi = true;
+    else if (strcmp(argv[2], TYPE_NCASI))
+        tamponi = false;
+    else
+    {
+        printf("invalid type \"%s\"\n", argv[2]);
+        return -1;
+    }
+
+    /* iterate through strings divided by "-" to read the period */
+    for (str = argv[3]; ; str = NULL)
+    {
+        token = strtok(str, "-");
+        if (token == NULL)
+            break;
+        
+        if (count >= 2)
+            continue;
+
+        period[count] = str_to_time(token);
+        if (period[count] == -1)
+        {
+            printf("invalid date format: \"%s\"\n", token);
+            return -1;
+        }
+        count++;
+    }
+
+    /* the dates specified in the period are more or less than two */
+    if (count != 2)
+    {
+        printf("invalid period format\n");
+        return -1;
+    }
+
+    /* period_len = period length in seconds / seconds in a day */
+    /* does not account for leap seconds */
+    period_len = 
+        (int)difftime(period[1], period[0]) / 86400 + 1;
+
+    entry = search_entry(peer->entries.last, period[0], flags, period_len);
+
+    if (entry == NULL)
+    {
+        printf("entry not found\n");
+        return 0;
+    }
+    
+    printf("FOUND:\n");
+    print_entry(entry);
+
+    return 0;
 }
 
 int cmd_stop(ThisPeer *peer, int argc, char **argv)
@@ -338,6 +424,11 @@ void handle_set_neighbors_response(ThisPeer *peer, Message *msgp)
     clear_timeout(peer);
     enable_user_input(peer);
 }
+
+/* ########## FUNCTIONS THAT HANDLE PEER REQUESTS ########## */
+
+
+
 
 
 /* ########## DEMULTIPLEXING ########## */
@@ -460,3 +551,99 @@ int main(int argc, char** argv)
         }
     }
 }
+
+/*
+types of messages:
+START               connect to ds (register peer)
+SET_NBRS            set nbrs list
+STOP                unconnect from ds (unregister peer)
+ADD_ENTRY           tell peer to add entries in data in its register
+REQ_DATA            ask peer for aggr data
+REPLY_DATA          reply with aggr data or null
+FLOOD_FOR_ENTRIES   ask peer to look for entries owners
+ENTRIES_FOUND       tell peer entries owners
+REQ_ENTRIES         ask entries to entries owner
+REPLY_ENTRIES       tell peer owned entries
+
+
+--> x   : comando inviato a x
+x <--   : comando ricevuto da x
+o       : comando inserito da terminale con effetto solo locale
+
+peer:
+START             --> ds
+ADD         p <--o--> p
+STOP              --> ds
+REQ_DATA    p <--o--> p     (get aggr)
+REPLY_DATA  p <-- --> p
+FLOOD       p <-- --> p
+
+on start(addr, port):
+    send START to ds(addr, port)
+
+    put udp socket in set
+    while true:
+        set timeout
+        select(set)
+        if received from sd
+            set peers
+            break
+
+on add(entry):
+    store entry
+
+on stop:
+    for each nbr:
+        send entries to nbr
+    close
+
+on get(aggr):
+    if aggr present:
+        show aggr
+    elif all data available:
+        compute aggr
+        store aggr
+        show aggr
+    elif data missing:
+        for each nbr:
+            send REQ_DATA(aggr) to nbr
+        wait for all REPLY_DATA(aggr) responses
+        if exists non empty response(aggr):
+            store aggr
+            show aggr
+        else:
+            for each nbr:
+                for each missing data:
+                    send FLOOD(data) to nbr
+            wait for all FLOOD(peer) responses
+            for each FLOOD(peer) response:
+                send REQ_ENTRIES(data) to peer
+                wait for REQ_ENTRIES(data) response from peer
+                store data
+            if not data missing:
+                compute aggr
+                store aggr
+                show aggr
+            else:
+                show "data not available"
+
+on REQ_DATA(aggr) from peer:
+    if aggr present:
+        respond REPLY_DATA(aggr) to peer
+    else:
+        respond REPLY_DATA(empty) to peer
+
+on FLOOD(data) from peer:
+    if data present:
+        respond FLOOD(me)
+    else:
+        for each nbr:
+            send FLOOD(data) to nbr
+        wait for all FLOOD(peer2) responses
+        for each FLOOD(peer2) response:
+            if peer2 has data:
+                send FLOOD(peer2) to peer
+
+
+
+*/

@@ -35,6 +35,7 @@ Flag values:
         0b011 = 3 = VARIATION  GLOBALE
     AGGREG:
         0b101 = 5 = TOTAL      GLOBALE
+        0b111 = 7 = VARIATION  GLOBALE
 
 Entries of the same type are ordered by timestamp. Two entries with different
 type but same timestamp are ordered by type: TYPE_TOTAL first. If two entries
@@ -78,7 +79,7 @@ time_t str_to_time(const char *str);
 void time_to_str(char *str, time_t *time);
 Entry *create_entry_empty();
 Entry *create_entry(time_t timestamp, int32_t tamponi, int32_t nuovi_casi, uint8_t flags);
-int cmp_entries(const Entry *a, const Entry *b);
+int cmp_entries(Entry *a, Entry *b);
 
 time_t get_enf_of_period(Entry *entry);
 
@@ -98,5 +99,7 @@ void print_entries_dsc(EntryList *list);
 
 char *serialize_entries(char *buffer, EntryList *list);
 char *deserialize_entries(char *buffer, EntryList *list);
+
+Entry *search_entry(Entry *from, time_t timestamp, int32_t flags, int32_t period_len);
 
 #endif
