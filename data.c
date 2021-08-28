@@ -5,12 +5,15 @@
  * String format: "%Y:%m:%d", example: "2020:03:01" 
  * 
  * @param str 
- * @return time_t representation of str
+ * @return time_t representation of str, -1 if cannot convert
  */
 time_t str_to_time(const char *str)
 {
+    char *p;
     struct tm time = { 0 };
-    strptime(str, "%Y:%m:%d", &time);
+    p = strptime(str, "%Y:%m:%d", &time);
+    if (p != &str[TIMESTAMP_STRLEN - 1])
+        return -1;
     return mktime(&time);
 }
 
@@ -381,7 +384,6 @@ void add_entry(EntryList *entries, Entry *entry)
 
 void print_entry(Entry *entry) 
 {
-    struct tm *time;
     time_t tmp_end_period;
     char str_time[TIMESTAMP_STRLEN];
 
