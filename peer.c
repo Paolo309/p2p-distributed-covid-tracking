@@ -9,6 +9,11 @@
 #include "commandline.h"
 #include "graph.h"
 
+/* comment out the next two defines to user the real date */
+#define FAKE_DAY 10
+#define FAKE_MONTH 2
+
+#define REG_CLOSING_HOUR 23
 
 int validate_port(const char *str_port)
 {
@@ -45,6 +50,7 @@ typedef struct ThisPeer {
     int state;
     struct timeval timeout, *actual_timeout;
     Graph neighbors;
+    EntryList entries;
 } ThisPeer;
 
 void init_peer(ThisPeer *peer, int host_port)
@@ -56,8 +62,10 @@ void init_peer(ThisPeer *peer, int host_port)
 
     FD_ZERO(&peer->sockets);
     peer->fdmax = 0;
+    
     peer->dserver = -1;
     peer->state = STATE_OFF;
+    peer->actual_timeout = NULL;
 
     create_graph(&peer->neighbors);
 }
@@ -202,8 +210,66 @@ int cmd_start(ThisPeer *peer, int argc, char **argv)
     return send_start_msg_to_dserver(peer);
 }
 
+#define ADD_TYPE_TAMPONI "t"
+#define ADD_TYPE_NCASI "c"
+
 int cmd_add(ThisPeer *peer, int argc, char **argv)
 {
+    time_t now;
+    struct tm *timeinfo;
+    char str_time[TIMESTAMP_STRLEN];
+    Entry *tmp_entry;
+    int32_t tmp_tamponi, tmp_ncasi;
+
+    if (argc != 3)
+    {
+        printf("usage: %s <type> <quantity>\n", argv[0]);
+        return -1;
+    }
+
+    tmp_tamponi = tmp_ncasi = 0;
+
+    if (strcmp(argv[1], ADD_TYPE_TAMPONI) == 0)
+    {
+        tmp_tamponi = atoi(argv[2]);
+    }
+    else if (strcmp(argv[1], ADD_TYPE_NCASI) == 0)
+    {
+        tmp_ncasi = atoi(argv[2]);
+    }
+    else
+    {
+        printf("invalid type \"%s\"\n", argv[1]);
+        return -1;
+    }
+
+    time(&now);
+    timeinfo = localtime(&now);
+
+    /* COMMENTED OUT FOR TESTING */
+    if (timeinfo->tm_hour >= REG_CLOSING_HOUR)
+        timeinfo->tm_mday++;
+
+    timeinfo->tm_hour = timeinfo->tm_min = timeinfo->tm_sec = 0;
+
+    #ifdef FAKE_DAY
+    timeinfo->tm_mday = FAKE_DAY;
+    #endif
+
+    #ifdef FAKE_MONTH
+    timeinfo->tm_mon = FAKE_MONTH;
+    #endif
+
+    /* TODO ugly: can directly pass time_t to create_entry */
+    strftime(str_time, TIMESTAMP_STRLEN, "%Y-%m-%d", timeinfo);
+
+    tmp_entry = create_entry(str_time, tmp_tamponi, tmp_ncasi, 0);
+    add_entry(&peer->entries, tmp_entry);
+
+    print_entries_asc(&peer->entries);
+
+    /* TODO remove memory leak in data when adding existing entry */
+
     return -1;
 }
 
@@ -341,6 +407,7 @@ int main(int argc, char** argv)
     ThisPeer peer;
     fd_set working_set;
     int ret, i, desc_ready;
+    char register_file[30];
 
     if (argc != 2)
     {
@@ -355,6 +422,11 @@ int main(int argc, char** argv)
     printf("PEER %d\n", ret);
 
     init_peer(&peer, ret);
+
+    /* TODO check if file was opened successfully */
+    sprintf(register_file, "reg_%d.txt", ret);
+    load_register_from_file(&peer.entries, register_file);
+    print_entries_asc(&peer.entries);
 
     add_desc(&peer, STDIN_FILENO);
 

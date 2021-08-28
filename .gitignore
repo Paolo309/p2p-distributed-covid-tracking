@@ -1,6 +1,7 @@
 .vscode
 peer
 ds
+objs/
 
 # Prerequisites
 *.d
