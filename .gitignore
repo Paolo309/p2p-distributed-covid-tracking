@@ -1,4 +1,6 @@
 .vscode
+peer
+ds
 
 # Prerequisites
 *.d

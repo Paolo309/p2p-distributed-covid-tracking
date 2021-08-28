@@ -22,11 +22,13 @@ Entry *create_entry(char* timestamp, int32_t tamponi, int32_t nuovi_casi, uint8_
     return tmp;
 }
 
-/**
- * Compare two entries by timestamp and data type. If the data types are equal,
- * returns the result of strcmp() applied to the two timestamps, or else it
- * returns -1 if the first entry il TYPE_TOTAL and the second one TYPE_VARIATION,
- * +1 otherwise.
+/** 
+ * Compare two entries. Entries are sorted in this manner:
+ * (1) earlier timestamp first;
+ * (2) if timestamps are equal, TYPE_TOTAL comes first;
+ * (3) if ENTRY_TYPEs are equal, AGGREG_DAILY comes first;
+ * (4) if ENTRY_AGGREGs are equal, shortest period length first;
+ * (5) if period lengths are equal, the entries are equal.
  * 
  * @param a 
  * @param b 
@@ -35,12 +37,21 @@ Entry *create_entry(char* timestamp, int32_t tamponi, int32_t nuovi_casi, uint8_
  */
 int cmp_entries(const Entry *a, const Entry *b)
 {
-    int cmp_res = strcmp(a->timestamp, b->timestamp);
-
+    int cmp_res;
+    
+    cmp_res = strcmp(a->timestamp, b->timestamp);
     if (cmp_res != 0)
         return cmp_res;
 
-    return (a->flags & ENTRY_TYPE) - (b->flags & ENTRY_TYPE);
+    cmp_res = (a->flags & ENTRY_TYPE) - (b->flags & ENTRY_TYPE);
+    if (cmp_res != 0)
+        return cmp_res;
+
+    cmp_res = (a->flags & ENTRY_AGGREG) - (b->flags & ENTRY_AGGREG);
+    if (cmp_res != 0)
+        return cmp_res;
+
+    return a->period_len - b->period_len;
 }
 
 /**
@@ -105,7 +116,10 @@ void load_register_from_file(EntryList *entries, const char* file_name)
 
     while (fscanf(fp, "%s %d %d %d", tmp_ts, &flags, &tmp_tamponi, &tmp_ncasi) != EOF) {
         tmp_entry = create_entry(tmp_ts, tmp_tamponi, tmp_ncasi, flags);
-                
+        
+        if (tmp_entry->flags & ENTRY_AGGREG)  
+            fscanf(fp, "%d", &tmp_entry->period_len);
+
         tmp_entry->prev = prev;
         if (prev != NULL) prev->next = tmp_entry;
         prev = tmp_entry;
@@ -329,7 +343,12 @@ void print_entry(Entry *entry)
 
     printf("\t");
 
-    printf("tamponi: %d\tnuovi_casi: %d\n", entry->tamponi, entry->nuovi_casi);
+    printf("tamponi: %d\tnuovi_casi: %d", entry->tamponi, entry->nuovi_casi);
+
+    if (entry->flags & ENTRY_AGGREG)
+        printf("\tperiodo: %d", entry->period_len);
+    
+    printf("\n");
 }
 
 void print_entries_asc(EntryList *list)
@@ -371,7 +390,11 @@ int main_test()
     tmp = create_entry("2020-01-12", 100, 23, SCOPE_GLOBAL);
     add_entry(&others, tmp);
 
-    tmp = create_entry("2020-02-10", 200, 46, SCOPE_GLOBAL | TYPE_VARIATION);
+    tmp = create_entry("2020-02-10", 200, 46, SCOPE_GLOBAL | TYPE_TOTAL);
+    add_entry(&others, tmp);
+
+    tmp = create_entry("2020-02-08", 2000, 460, SCOPE_GLOBAL | TYPE_TOTAL | AGGREG_PERIOD);
+    tmp->period_len = 3;
     add_entry(&others, tmp);
     
     printf("others\n");

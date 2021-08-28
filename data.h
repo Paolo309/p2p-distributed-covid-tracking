@@ -21,15 +21,23 @@ Flag field stores:
     entry type:
         total: entry value is a sum of values relative to the timestamp
         variation: entry value is the variation from the day before
+    entry aggreg:
+        daily: entry value is relative to the day specified by timestamp
+        period: entry value is relative to a period starting from timestamp
+                with duration specified by period_len
 
 Flag values:
-    0b00 = 0 = TOTAL      LOCALE
-    0b01 = 1 = TOTAL      GLOBALE 
-    0b10 = 2 = VARIATION  LOCALE 
-    0b11 = 3 = VARIATION  GLOBALE
+    DAILY:
+        0b000 = 0 = TOTAL      LOCALE
+        0b001 = 1 = TOTAL      GLOBALE 
+        0b011 = 3 = VARIATION  GLOBALE
+    AGGREG:
+        0b101 = 5 = TOTAL      GLOBALE
 
 Entries of the same type are ordered by timestamp. Two entries with different
-type but same timestamp are ordered by type: TYPE_TOTAL first.
+type but same timestamp are ordered by type: TYPE_TOTAL first. If two entries
+have the same type, the ones that are a sum over a period are stored after
+the ones relative to a single day.
 
 While adding a new entry into the register, if an entry with same type and
 timestamp is already present, the two are aggregated only if the already
@@ -44,12 +52,16 @@ existing one is local (SCOPE_LOCAL).
 #define TYPE_TOTAL 0
 #define TYPE_VARIATION 2
 
+#define ENTRY_AGGREG 4
+#define AGGREG_DAILY 0
+#define AGGREG_PERIOD 4
 
 typedef struct Entry {
     char timestamp[11];
     int32_t flags;
     int32_t tamponi;
     int32_t nuovi_casi;
+    int32_t period_len;
     struct Entry *prev;
     struct Entry *next;
     
