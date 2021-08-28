@@ -11,7 +11,7 @@
 time_t str_to_time(const char *str)
 {
     struct tm time = { 0 };
-    strptime(str, "%Y-%m-%d", &time);
+    strptime(str, "%Y:%m:%d", &time);
     return mktime(&time);
 }
 
@@ -25,7 +25,7 @@ void time_to_str(char *str, time_t *time)
 {
     struct tm *timeinfo;
     timeinfo = localtime(time);
-    strftime(str, TIMESTAMP_STRLEN, "%Y-%m-%d", timeinfo);
+    strftime(str, TIMESTAMP_STRLEN, "%Y:%m:%d", timeinfo);
 }
 
 /**
@@ -391,7 +391,7 @@ void print_entry(Entry *entry)
         /* time = localtime(&entry->timestamp);
         strftime(str_time, TIMESTAMP_STRLEN, "%Y-%m-%d", time); */
         time_to_str(str_time, &entry->timestamp);
-        printf("[ %s ", str_time);
+        printf("[ %s", str_time);
 
         /* time->tm_mday += entry->period_len - 1;
         tmp_end_period = mktime(time);
@@ -400,13 +400,14 @@ void print_entry(Entry *entry)
         strftime(str_time, TIMESTAMP_STRLEN, "%Y-%m-%d", time); */
         tmp_end_period = get_enf_of_period(entry);
         time_to_str(str_time, &tmp_end_period);
-        printf("TO %s ] (%d days)", str_time, entry->period_len);
+        printf("-%s ] (%d days)", str_time, entry->period_len);
     }
     else
     {
-        time = localtime(&entry->timestamp);
-        strftime(str_time, TIMESTAMP_STRLEN, "%Y-%m-%d", time);
-        printf("[ %s ]", str_time);
+        /* time = localtime(&entry->timestamp);
+        strftime(str_time, TIMESTAMP_STRLEN, "%Y-%m-%d", time); */
+        time_to_str(str_time, &entry->timestamp);
+        printf("[ %s ] ", str_time);
     }
 
     printf(" (flag: %d) ", entry->flags);
@@ -423,7 +424,7 @@ void print_entry(Entry *entry)
 
     printf("\t");
 
-    printf("tamponi: %d\tnuovi_casi: %d", entry->tamponi, entry->nuovi_casi);
+    printf("t: %d\tc: %d", entry->tamponi, entry->nuovi_casi);
     
     printf("\n");
 }
@@ -527,7 +528,7 @@ char *deserialize_entries(char *buffer, EntryList *list)
     return buffer;
 }
 
-int main_test()
+int main()
 {
     EntryList entries, others;
     Entry *tmp;    
@@ -543,15 +544,15 @@ int main_test()
     printf("entries\n");
     print_entries_asc(&entries);
     
-    tmp_time = str_to_time("2020-01-12");
+    tmp_time = str_to_time("2020:01:12");
     tmp = create_entry(tmp_time, 100, 23, SCOPE_GLOBAL);
     add_entry(&others, tmp);
 
-    tmp_time = str_to_time("2020-02-07");
+    tmp_time = str_to_time("2020:02:07");
     tmp = create_entry(tmp_time, 200, 46, SCOPE_LOCAL | TYPE_VARIATION);
     add_entry(&others, tmp);
 
-    tmp_time = str_to_time("2020-02-08");
+    tmp_time = str_to_time("2020:02:08");
     tmp = create_entry(tmp_time, 2000, 460, SCOPE_GLOBAL | TYPE_TOTAL | AGGREG_PERIOD);
     tmp->period_len = 3;
     add_entry(&others, tmp);
