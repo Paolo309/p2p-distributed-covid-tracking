@@ -2,8 +2,7 @@
 
 /**
  * Convert a string representation of a date into a time_t value.
- * The string must conform the ISO 8601 date format: "%Y-%m-%d",
- * example: "2020-03-01" 
+ * String format: "%Y:%m:%d", example: "2020:03:01" 
  * 
  * @param str 
  * @return time_t representation of str
@@ -528,7 +527,7 @@ char *deserialize_entries(char *buffer, EntryList *list)
     return buffer;
 }
 
-int main()
+int main_test()
 {
     EntryList entries, others;
     Entry *tmp;    
