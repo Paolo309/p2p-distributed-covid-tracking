@@ -397,7 +397,7 @@ void print_entries_dsc(EntryList *list)
     }
 }
 
-int main()
+int main_test()
 {
     EntryList entries, others;
     Entry *tmp;    
