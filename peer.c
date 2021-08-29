@@ -140,7 +140,230 @@ int send_start_msg_to_dserver(ThisPeer *peer)
     return 0;
 }
 
+/* query: start period, end period, TOT or VAR 
 
+TOT:
+    search single entry
+    if found:
+        stop
+    
+    LT = create list of GLOBAL TOTS needed
+    for each day in period:
+        add empty entry to LT with day, flags = TOT
+    
+    res = empty entry
+    for each entry in LT:
+        if entry present in register:
+            res += entry
+            remove entry from LT
+
+    if LT is empty:
+        stop
+    
+    REQ_DATA(aggr)
+    wait REPLY_DATA(aggr)
+
+    if REPLY_DATA(aggr) not empty:
+        stop
+
+    FLOOD_FOR_ENTRIES(LT)
+    wait FLOOD_FOR_ENTRIES(peers)
+
+    for each peer in peers:
+        ask peer for entry
+        wait for entry
+        update entry in LT
+
+    // N.B. entries in LT not update are not present in
+    // any register, so the value is assumed to be zero
+
+    for each entry in LT:
+        save entry in register
+        res += entry
+        remove entry from LT?
+    
+    stop
+
+VAR:
+    VF = create list of GLOBAL VARS found
+    VNF = create list of GLOBAL VARS not found
+    for each day in period:
+        if register contains correct entry:
+            put it in VF
+        else:
+            put it in VNF
+    
+    if VNF empty:
+        stop
+    
+    LT = create list of GLOBAL TOTS needed
+    for each day from start period to end period-1:
+        add empty entry to LT with day, flags = TOT
+    
+    TF = create list of GLOBAL TOTS possessed
+    for each entry in LT:
+        if entry present in register:
+            add entry to TF
+            remove entry from LT
+
+    if LT is empty:
+        compute aggr
+        stop
+    
+    VFP = create list of GLOBAL VARS found in nbrs
+
+    REQ_DATA(VNF)
+    wait REPLY_DATA(VFP)
+
+    for each entry in VFP:
+        remove entry from VNF
+
+    if VNF is empty:
+        stop
+
+    clear LT and TF
+
+    LT = create list of GLOBAL TOTS needed
+    for each entry in VNF:
+        add empty entry to LT with day, flags = TOT
+        add empty entry to LT with prev day, flags = TOT
+
+    TF = create list of GLOBAL TOTS possessed
+    for each entry in LT:
+        if entry present in register:
+            add entry to TF
+            remove entry from LT
+
+    if LT is empty:
+        compute aggr
+        stop
+    
+    FLOOD_FOR_ENTRIES(LT)
+    wait FLOOD_FOR_ENTRIES(peers)
+
+    for each peer in peers:
+        ask peer for entry
+        wait for entry
+        update entry in LT
+
+    // N.B. entries in LT not update are not present in
+    // any register, so the value is assumed to be zero
+
+    compute aggr
+    stop
+
+*/
+void get_aggr_tot(ThisPeer *peer, time_t beg_period, time_t end_period)
+{
+    int period_len;
+    Entry *entry, *reg_entry, *entry_res, *removed_entry;
+    int32_t flags;
+    EntryList totals_needed;
+    struct tm *tm_day;
+    /* struct tm *tm_beg_period; */
+    time_t t_day;
+    int count = 0;
+
+    /* flags that the entry we're looking for must have:
+        AGGREG_PERIOD : we're looking for an entry that covers a period
+        SCOPE_GLOBAL  : the value of the entry must be common to all peers
+        TYPE_TOTAL    : we're looking for a sum, not a variation */
+    flags = AGGREG_PERIOD | SCOPE_GLOBAL | TYPE_TOTAL;
+
+    /* period_len = period length in seconds / seconds in a day */
+    /* does not account for leap seconds */
+    /* includes the first and last days of the period, hence the +1 */
+    period_len = (int)difftime(end_period, beg_period) / 86400 + 1;
+
+    entry = search_entry(peer->entries.last, beg_period, flags, period_len);
+
+    if (entry != NULL)
+    {
+        printf("entry found in local register\n");
+        print_entry(entry);
+        return;
+    }
+
+    printf("entry not found in local register\n");
+
+    /* totals_needed is a list that will contain empty entries, one
+        for each day of the period, with timestamp and flags properly
+        set to match already existsing entries (if there are any) */
+
+    init_entry_list(&totals_needed);
+
+    /* AGGREG_DAILY : because we're looking for daily totals */
+    flags = AGGREG_DAILY | SCOPE_GLOBAL | TYPE_TOTAL;
+
+    /* time values used to iterate through the days of the period */
+    t_day = end_period;
+    tm_day = localtime(&t_day);
+    
+    /* for each day of the period */
+    while (difftime(t_day, beg_period) >= 0)
+    {
+        /* create empty entry */
+        entry = create_entry(t_day, 0, 0, flags);
+        add_entry(&totals_needed, entry);
+
+        /* move back one day */
+        tm_day->tm_mday--;
+        t_day = mktime(tm_day);
+        tm_day = localtime(&t_day);
+
+        count++;
+    }
+
+    printf("created %d entries\n", count);
+
+    print_entries_asc(&totals_needed);
+
+    /* entry which will contain the result of the aggregation */
+    entry_res = create_entry(
+        beg_period, 0, 0, AGGREG_PERIOD | SCOPE_GLOBAL | TYPE_TOTAL
+    );
+    entry_res->period_len = period_len;
+
+    count = 0;
+    
+    entry = totals_needed.last;
+    while (entry) /* for each entry needed to compute the sum */
+    {
+        reg_entry = search_entry(
+            peer->entries.last, entry->timestamp, entry->flags, 0
+        );
+
+        removed_entry = NULL;
+
+        if (reg_entry != NULL)
+        {
+            printf("found entry: ");
+            print_entry(reg_entry);
+            count++;
+
+            /* update the aggregated entry */
+            entry_res->tamponi += reg_entry->tamponi;
+            entry_res->nuovi_casi += reg_entry->nuovi_casi;
+
+            remove_entry(&totals_needed, entry);
+            removed_entry = entry;
+        }
+
+        /* move back one entry, freeing the current one if needed */
+        entry = entry->prev;
+        free(removed_entry);
+    }
+
+    printf("found %d entries\n", count);
+
+    printf("partial res:\n");
+    print_entry(entry_res);
+
+    printf("remaining entries:\n");
+    print_entries_asc(&totals_needed);
+
+    /* TODO continue from here */
+}
 
 
 
@@ -280,12 +503,12 @@ int cmd_add(ThisPeer *peer, int argc, char **argv)
 int cmd_get(ThisPeer *peer, int argc, char **argv)
 {
     char *token, *str;
-    int ret, count;
+    int count;
     time_t period[2];
-    int32_t period_len;
+    /* int32_t period_len; */
     int32_t flags;
-    bool tamponi;
-    Entry *entry;
+    /* bool tamponi; */
+    /* Entry *entry; */
 
     if (argc != 4)
     {
@@ -309,7 +532,7 @@ int cmd_get(ThisPeer *peer, int argc, char **argv)
     }
     flags |= AGGREG_PERIOD | SCOPE_GLOBAL;
 
-    if (strcmp(argv[2], TYPE_TAMPONI))
+    /* if (strcmp(argv[2], TYPE_TAMPONI))
         tamponi = true;
     else if (strcmp(argv[2], TYPE_NCASI))
         tamponi = false;
@@ -317,7 +540,7 @@ int cmd_get(ThisPeer *peer, int argc, char **argv)
     {
         printf("invalid type \"%s\"\n", argv[2]);
         return -1;
-    }
+    } */
 
     /* iterate through strings divided by "-" to read the period */
     for (str = argv[3]; ; str = NULL)
@@ -345,21 +568,65 @@ int cmd_get(ThisPeer *peer, int argc, char **argv)
         return -1;
     }
 
+    if (strcmp(argv[1], AGGREG_SUM) == 0)
+        get_aggr_tot(peer, period[0], period[1]);
+    else if (strcmp(argv[1], AGGREG_VAR) == 0)
+        return 0;
+
     /* period_len = period length in seconds / seconds in a day */
     /* does not account for leap seconds */
-    period_len = 
+    /* period_len = 
         (int)difftime(period[1], period[0]) / 86400 + 1;
 
     entry = search_entry(peer->entries.last, period[0], flags, period_len);
 
-    if (entry == NULL)
+    if (entry != NULL)
     {
-        printf("entry not found\n");
+        printf("entry found\n");
+        print_entry(entry);
         return 0;
     }
     
-    printf("FOUND:\n");
-    print_entry(entry);
+    printf("entry not found in local register\n"); */
+
+
+    
+
+
+    /* TODO when comparing entries, check period_len only if both(?) are
+    of type AGGREG_PERIOD */
+
+    /* search required entries:
+        time = end period
+        found = empty entry list
+        not_found = empty entry list
+
+        flags = SCOPE_GLOBAL
+        if looking for variation:
+            flags |= TYPE_VARIATION
+        else:
+            flags |= TYPE_TOTAL
+
+        while time >= start period:
+            entry = search entry (time, flags, 0)
+
+            if entry == NULL:
+                not_found.push create entry with values zero
+            else
+                found.push entry
+
+            time -= 1 day
+
+        if not_found.empty:
+            print all entries
+            return
+        
+        ask entries to peers
+
+        for each past entry from end to start period:
+            - must be daily
+            - must be 
+     */
 
     return 0;
 }

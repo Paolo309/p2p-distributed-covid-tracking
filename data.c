@@ -382,6 +382,28 @@ void add_entry(EntryList *entries, Entry *entry)
     entries->first = entry;
 }
 
+/**
+ * Removes the specified entry from the list. Does not check whether the
+ * list contains or not the entries.
+ * N.B. If the entry is not in the list, the operation is similar to a
+ * concatenation which excludes the first entry in the second list.
+ * 
+ * @param entries 
+ * @param entry 
+ */
+void remove_entry(EntryList *entries, Entry *entry)
+{
+    if (entry->next != NULL)
+        entry->next->prev = entry->prev;
+    else
+        entries->last = entry->prev;
+    
+    if (entry->prev != NULL)
+        entry->prev->next = entry->next;
+    else
+        entries->first = entry->next;
+}
+
 void print_entry(Entry *entry) 
 {
     time_t tmp_end_period;

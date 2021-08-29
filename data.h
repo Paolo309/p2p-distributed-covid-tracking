@@ -92,6 +92,7 @@ void load_register_from_file(EntryList *entries, const char* file_name);
 void merge_entry_lists(EntryList *entries, EntryList *new_entries);
 
 void add_entry(EntryList *entries, Entry *entry);
+void remove_entry(EntryList *entries, Entry *entry);
 
 void print_entry(Entry *entry);
 void print_entries_asc(EntryList *list);
