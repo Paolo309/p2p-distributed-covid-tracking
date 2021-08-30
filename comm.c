@@ -31,6 +31,7 @@ void serialize_message(char *dest, Message *msgp)
 {
     *(uint8_t*)(dest) = msgp->type;
     *(uint32_t*)(dest + 1) = htonl(msgp->body_len);
+    *(uint32_t*)(dest + 5) = htonl(msgp->req_num);
     memcpy(dest + MSG_HEADER_LEN, msgp->body, msgp->body_len);
 }
 
@@ -44,6 +45,7 @@ void deserialize_message(char *src, Message *msgp)
 {
     msgp->type = *(uint8_t*)src;
     msgp->body_len = ntohl(*(uint32_t*)(src + 1));
+    msgp->req_num =  ntohl(*(uint32_t*)(src + 5));
     memcpy(msgp->body, src + MSG_HEADER_LEN, msgp->body_len);
 }
 

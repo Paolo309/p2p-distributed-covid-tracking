@@ -363,7 +363,7 @@ void print_graph(Graph *graph)
 char *serialize_peers(char *buffer, GraphNode *nodes)
 {
     char *buf_start = buffer;
-    int counter = 0;
+    int32_t counter = 0;
 
     buffer += sizeof(int32_t);
     

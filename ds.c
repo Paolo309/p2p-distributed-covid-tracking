@@ -92,6 +92,8 @@ int main(int argc, char** argv)
         exit(EXIT_FAILURE);
     }
 
+    create_graph(&peers);
+
     for (;;)
     {
         ret = recv_message_from(sd, &msg, &client_addr);

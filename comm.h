@@ -10,7 +10,7 @@
 #include "network.h"
 
 #define BUFSIZE 1024
-#define MSG_HEADER_LEN 5
+#define MSG_HEADER_LEN 9
 #define MAX_BODY_LEN 512
 
 #define MSG_START 0
@@ -27,6 +27,7 @@
 typedef struct Message {
     uint8_t type;
     uint32_t body_len;
+    uint32_t req_num;
     char body[MAX_BODY_LEN];
 } Message;
 

@@ -249,9 +249,21 @@ void merge_entry_lists(EntryList *dest, EntryList *src)
             {
                 /* update dest entry with src entry data, and delete the src entry */
                 
-                a->tamponi += b->tamponi;
-                a->nuovi_casi += b->nuovi_casi;
-                a->flags = b->flags; /* ? */
+                /* adding LOCAL entry values to LOCAL entry values */
+                if ((b->flags & ENTRY_SCOPE) == SCOPE_LOCAL)
+                {
+                    
+                    a->tamponi += b->tamponi;
+                    a->nuovi_casi += b->nuovi_casi;
+                    /* a->flags = b->flags; */
+                }
+                /* copying GLOBAL entry values into LOCAL entry values */
+                else
+                {
+                    a->tamponi = b->tamponi;
+                    a->nuovi_casi = b->nuovi_casi;
+                    a->flags = b->flags;
+                }
             }
             
             tmp = b->prev;
@@ -344,10 +356,21 @@ void add_entry(EntryList *entries, Entry *entry)
             /* merge entries only if the dest entry is LOCAL */
             if ((p->flags & ENTRY_SCOPE) == SCOPE_LOCAL)
             {
-                /* update entry values */
-                p->tamponi += entry->tamponi;
-                p->nuovi_casi += entry->nuovi_casi;
-                p->flags = entry->flags;
+                /* adding LOCAL entry values to LOCAL entry values */
+                if ((entry->flags & ENTRY_SCOPE) == SCOPE_LOCAL)
+                {
+                    
+                    p->tamponi += entry->tamponi;
+                    p->nuovi_casi += entry->nuovi_casi;
+                    /* p->flags = entry->flags; */
+                }
+                /* copying GLOBAL entry values into LOCAL entry values */
+                else
+                {
+                    p->tamponi = entry->tamponi;
+                    p->nuovi_casi = entry->nuovi_casi;
+                    p->flags = entry->flags;
+                }
             }
             return;
         }
