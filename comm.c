@@ -120,8 +120,6 @@ int recv_message_from(int sd, Message *msgp, struct sockaddr_in* from)
     else 
         lenp = NULL;
     
-    printf("R");
-    fflush(stdout);
     ret = recvfrom(sd, _buffer, BUFSIZE, 0, (struct sockaddr*)from, lenp);
     save_errno = errno;
     

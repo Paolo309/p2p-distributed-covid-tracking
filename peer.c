@@ -84,7 +84,7 @@ void _remove_desc(fd_set *fdsetp, int *fdmax, int fd)
     
     if (fd == *fdmax)
     {
-        while (FD_ISSET(*fdmax, fdsetp) == false)
+        while (FD_ISSET(*fdmax, fdsetp) == false && *fdmax >= 0)
             *fdmax -= 1;
     }
 }
@@ -132,7 +132,10 @@ void disable_user_input(ThisPeer *peer)
     remove_desc(peer, STDIN_FILENO);
 }
 
-
+bool is_user_input_enabled(ThisPeer *peer)
+{
+    return FD_ISSET(STDIN_FILENO, &peer->sockets);
+}
 
 int send_start_msg_to_dserver(ThisPeer *peer)
 {
@@ -289,6 +292,8 @@ void get_aggr_tot(ThisPeer *peer, time_t beg_period, time_t end_period)
     int sd, fdmax, ret;
     socklen_t slen;
     int i, desc_ready;
+    int nbr_count;
+    bool data_found;
 
     /* flags that the entry we're looking for must have:
         AGGREG_PERIOD : we're looking for an entry that covers a period
@@ -402,9 +407,12 @@ void get_aggr_tot(ThisPeer *peer, time_t beg_period, time_t end_period)
 
     FD_ZERO(&nbrs_set);
     FD_ZERO(&working_set);
+    fdmax = -1;
+    nbr_count = 0;
 
     init_entry_list(&req_aggr);
     req_entry = create_entry(beg_period, 0, 0, AGGREG_PERIOD | SCOPE_GLOBAL | TYPE_TOTAL);
+    req_entry->period_len = period_len;
     add_entry(&req_aggr, req_entry);
 
     slen = sizeof(struct sockaddr_in);
@@ -439,13 +447,16 @@ void get_aggr_tot(ThisPeer *peer, time_t beg_period, time_t end_period)
         }
 
         _add_desc(&nbrs_set, &fdmax, sd);
+        nbr_count++;
         
         nbr = nbr->next;
     }
 
     printf("waiting for responses\n");
 
-    for (;;)
+    data_found = false;
+
+    while (nbr_count > 0)
     {
         working_set = nbrs_set;
 
@@ -456,28 +467,48 @@ void get_aggr_tot(ThisPeer *peer, time_t beg_period, time_t end_period)
             return;
         }
 
-        printf("sd ready\n");
-
         for (i = 0; i <= fdmax && desc_ready > 0; i++)
         {
             if (!FD_ISSET(i, &working_set)) continue;
 
             desc_ready--;
 
-            ret = recv_message(i, &msg);
-            if (ret == -1)
+            if (!data_found)
             {
-                printf("error while receiving REPLY_DATA\n");
-                return;
+                ret = recv_message(i, &msg);
+                if (ret == -1)
+                {
+                    printf("error while receiving REPLY_DATA\n");
+                    return;
+                }
+                /* check message type? */
+                
+                init_entry_list(&data_received);
+                deserialize_entries(msg.body, &data_received);
+
+                if (!is_entry_list_empty(&data_received))
+                {
+                    printf("aggregate found in neighbor\n");
+                    data_found = true;
+                }
+
+                /* merge_entry_lists(&totals_needed, &data_received); */
             }
-            /* check message type? */
             
-            init_entry_list(&data_received);
-            deserialize_entries(msg.body, &data_received);
-            merge_entry_lists(&totals_needed, &data_received);
-            /* TODO test this */
+            close(i);
+            _remove_desc(&nbrs_set, &fdmax, i);
+            nbr_count--;
         }
     }
+
+    if (data_found)
+    {
+        printf("result:\n");
+        print_entry(data_received.first);
+        return;
+    }
+
+    printf("END WIP\n");
 }
 
 
@@ -658,6 +689,7 @@ int cmd_get(ThisPeer *peer, int argc, char **argv)
     } */
 
     /* iterate through strings divided by "-" to read the period */
+    count = 0;
     for (str = argv[3]; ; str = NULL)
     {
         token = strtok(str, "-");
@@ -843,12 +875,61 @@ void handle_set_neighbors_response(ThisPeer *peer, Message *msgp)
 void handle_req_data(ThisPeer *peer, Message *msgp, int sd)
 {
     EntryList req_entries;
-    
+    EntryList found_entries;
+    Entry *req_entry, *found_entry, *removed_entry;
+    char *buff;
+    int ret;
+
     init_entry_list(&req_entries);
     deserialize_entries(msgp->body, &req_entries);
 
     printf("required entries\n");
     print_entries_asc(&req_entries);
+
+    init_entry_list(&found_entries);
+    
+    req_entry = req_entries.last;
+    while (req_entry)
+    {
+        found_entry = search_entry(
+            peer->entries.last, 
+            req_entry->timestamp,
+            req_entry->flags,
+            req_entry->period_len
+        );
+
+        removed_entry = NULL;
+
+        if (found_entry != NULL)
+        {
+            add_entry(&found_entries, found_entry);
+            remove_entry(&req_entries, req_entry);
+            removed_entry = req_entry;
+        }
+
+        req_entry = req_entry->next;
+        free(removed_entry);
+    }
+
+    printf("entries available:\n");
+    print_entries_asc(&found_entries);
+
+    printf("entries NOT available:\n");
+    print_entries_asc(&req_entries);
+
+    msgp->type = MSG_REPLY_DATA;
+    buff = serialize_entries(msgp->body, &found_entries);
+    buff = serialize_entries(buff, &req_entries);
+    msgp->body_len = buff - msgp->body;
+
+    ret = send_message(sd, msgp);
+    if (ret == -1)
+    {
+        printf("could not send entries to requester\n");
+        return;
+    }
+
+    printf("entries sent to requester\n");
 }
 
 
@@ -890,7 +971,7 @@ void demux_peer_request(ThisPeer *peer, int sd)
     struct sockaddr_in addr;
     socklen_t slen;
 
-    printf("demultiplexing peer request\n");
+    printf("\ndemultiplexing peer request\n");
 
     if (sd == peer->listening)
     {
@@ -918,6 +999,8 @@ void demux_peer_request(ThisPeer *peer, int sd)
     if (msg.type == MSG_REQ_DATA)
     {
         handle_req_data(peer, &msg, sd);
+        close(sd);
+        remove_desc(peer, sd);
     }
 }
 
@@ -926,7 +1009,7 @@ void demux_server_request(ThisPeer *peer)
     Message msg;
     int ret;
 
-    printf("demultiplexing server request\n");
+    printf("\ndemultiplexing server request\n");
 
     ret = recv_message(peer->dserver, &msg);
 
@@ -979,6 +1062,12 @@ int main(int argc, char** argv)
     for (;;)
     {
         working_set = peer.sockets;
+
+        if (is_user_input_enabled(&peer))
+        {
+            printf("peer@%d$ ", ntohs(peer.addr.sin_port));
+            fflush(stdout);
+        }
 
         desc_ready = select(peer.fdmax + 1, &working_set, NULL, NULL, peer.actual_timeout);
 

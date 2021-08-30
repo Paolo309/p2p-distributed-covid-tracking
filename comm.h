@@ -11,7 +11,7 @@
 
 #define BUFSIZE 1024
 #define MSG_HEADER_LEN 5
-#define MAX_BODY_LEN 256
+#define MAX_BODY_LEN 512
 
 #define MSG_START 0
 #define MSG_SET_NBRS 1
