@@ -11,6 +11,7 @@
 
 typedef struct Peer {
     struct sockaddr_in addr;
+    struct sockaddr_in comm_addr;
     struct GraphNode *node;
 } Peer;
 

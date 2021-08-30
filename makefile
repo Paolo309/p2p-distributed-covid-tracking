@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -std=c89 -ansi -pedantic -pedantic-errors -Wall
+CFLAGS = -std=c89 -ansi -pedantic -pedantic-errors -Wall -g
 
 all: ds peer
 

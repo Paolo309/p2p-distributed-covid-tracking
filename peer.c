@@ -47,7 +47,7 @@ int validate_port(const char *str_port)
 typedef struct ThisPeer {
     struct sockaddr_in addr;
     fd_set sockets;
-    int dserver, fdmax;
+    int dserver, listening, fdmax;
     int state;
     struct timeval timeout, *actual_timeout;
     Graph neighbors;
@@ -65,29 +65,49 @@ void init_peer(ThisPeer *peer, int host_port)
     peer->fdmax = 0;
     
     peer->dserver = -1;
+    peer->listening = -1;
     peer->state = STATE_OFF;
     peer->actual_timeout = NULL;
 
     create_graph(&peer->neighbors);
 }
 
+void _add_desc(fd_set *fdsetp, int *fdmax, int fd)
+{
+    FD_SET(fd, fdsetp);
+    if (fd > *fdmax) *fdmax = fd;
+}
+
+void _remove_desc(fd_set *fdsetp, int *fdmax, int fd)
+{
+    FD_CLR(fd, fdsetp);
+    
+    if (fd == *fdmax)
+    {
+        while (FD_ISSET(*fdmax, fdsetp) == false)
+            *fdmax -= 1;
+    }
+}
+
 void add_desc(ThisPeer *peer, int fd)
 {
-    FD_SET(fd, &peer->sockets);
+    _add_desc(&peer->sockets, &peer->fdmax, fd);
+    /* FD_SET(fd, &peer->sockets);
     
     if (fd > peer->fdmax)
-        peer->fdmax = fd;
+        peer->fdmax = fd; */
 }
 
 void remove_desc(ThisPeer *peer, int fd)
 {
-    FD_CLR(fd, &peer->sockets);
+    _remove_desc(&peer->sockets, &peer->fdmax, fd);
+    /* FD_CLR(fd, &peer->sockets);
     
     if (fd == peer->fdmax)
     {
         while (FD_ISSET(peer->fdmax, &peer->sockets) == false)
             peer->fdmax--;
-    }
+    } */
 }
 
 void set_timeout(ThisPeer *peer, int seconds)
@@ -256,13 +276,19 @@ VAR:
 void get_aggr_tot(ThisPeer *peer, time_t beg_period, time_t end_period)
 {
     int period_len;
-    Entry *entry, *reg_entry, *entry_res, *removed_entry;
+    Entry *entry, *req_entry, *reg_entry, *entry_res, *removed_entry;
     int32_t flags;
-    EntryList totals_needed;
+    EntryList totals_needed, req_aggr, data_received;
     struct tm *tm_day;
     /* struct tm *tm_beg_period; */
     time_t t_day;
+    GraphNode *nbr;
+    fd_set nbrs_set, working_set;
+    Message msg;
     int count = 0;
+    int sd, fdmax, ret;
+    socklen_t slen;
+    int i, desc_ready;
 
     /* flags that the entry we're looking for must have:
         AGGREG_PERIOD : we're looking for an entry that covers a period
@@ -293,7 +319,7 @@ void get_aggr_tot(ThisPeer *peer, time_t beg_period, time_t end_period)
     init_entry_list(&totals_needed);
 
     /* AGGREG_DAILY : because we're looking for daily totals */
-    flags = AGGREG_DAILY | SCOPE_GLOBAL | TYPE_TOTAL;
+    flags = AGGREG_DAILY | SCOPE_LOCAL | TYPE_TOTAL;
 
     /* time values used to iterate through the days of the period */
     t_day = end_period;
@@ -335,7 +361,7 @@ void get_aggr_tot(ThisPeer *peer, time_t beg_period, time_t end_period)
 
         removed_entry = NULL;
 
-        if (reg_entry != NULL)
+        if (reg_entry != NULL && reg_entry->flags & SCOPE_GLOBAL)
         {
             printf("found entry: ");
             print_entry(reg_entry);
@@ -356,13 +382,102 @@ void get_aggr_tot(ThisPeer *peer, time_t beg_period, time_t end_period)
 
     printf("found %d entries\n", count);
 
+    if (is_entry_list_empty(&totals_needed))
+    {
+        printf("result computed\n");
+        print_entry(entry_res);
+        add_entry(&peer->entries, entry_res);
+        printf("updated register\n");
+        print_entries_asc(&peer->entries);
+        return;
+    }
+
     printf("partial res:\n");
     print_entry(entry_res);
 
     printf("remaining entries:\n");
     print_entries_asc(&totals_needed);
-
+    
     /* TODO continue from here */
+
+    FD_ZERO(&nbrs_set);
+    FD_ZERO(&working_set);
+
+    init_entry_list(&req_aggr);
+    req_entry = create_entry(beg_period, 0, 0, AGGREG_PERIOD | SCOPE_GLOBAL | TYPE_TOTAL);
+    add_entry(&req_aggr, req_entry);
+
+    slen = sizeof(struct sockaddr_in);
+
+    nbr = peer->neighbors.first;
+    while (nbr)
+    {
+        sd = socket(AF_INET, SOCK_STREAM, 0);
+        if (sd == -1)
+        {
+            perror("socket error");
+            return;
+        }
+
+        ret = connect(sd, (struct sockaddr *)&nbr->peer->addr, slen);
+        if (ret == -1)
+        {
+            perror("connect error");
+            return;
+        }
+
+        msg.type = MSG_REQ_DATA;
+        msg.body_len = serialize_entries(msg.body, &req_aggr) - msg.body;
+        
+        printf("asking entries to %d\n", ntohs(nbr->peer->addr.sin_port));
+
+        ret = send_message(sd, &msg);
+        if (ret == -1)
+        {
+            printf("could not send REQ_DATA to peer %d\n", ntohs(nbr->peer->addr.sin_port));
+            return;
+        }
+
+        _add_desc(&nbrs_set, &fdmax, sd);
+        
+        nbr = nbr->next;
+    }
+
+    printf("waiting for responses\n");
+
+    for (;;)
+    {
+        working_set = nbrs_set;
+
+        desc_ready = select(fdmax + 1, &working_set, NULL, NULL, NULL);
+        if (desc_ready == -1)
+        {
+            perror("select error");
+            return;
+        }
+
+        printf("sd ready\n");
+
+        for (i = 0; i <= fdmax && desc_ready > 0; i++)
+        {
+            if (!FD_ISSET(i, &working_set)) continue;
+
+            desc_ready--;
+
+            ret = recv_message(i, &msg);
+            if (ret == -1)
+            {
+                printf("error while receiving REPLY_DATA\n");
+                return;
+            }
+            /* check message type? */
+            
+            init_entry_list(&data_received);
+            deserialize_entries(msg.body, &data_received);
+            merge_entry_lists(&totals_needed, &data_received);
+            /* TODO test this */
+        }
+    }
 }
 
 
@@ -549,6 +664,8 @@ int cmd_get(ThisPeer *peer, int argc, char **argv)
         if (token == NULL)
             break;
         
+        printf("tok \"%s\"", token); /* BUGGY */
+        
         if (count >= 2)
             continue;
 
@@ -564,7 +681,7 @@ int cmd_get(ThisPeer *peer, int argc, char **argv)
     /* the dates specified in the period are more or less than two */
     if (count != 2)
     {
-        printf("invalid period format\n");
+        printf("invalid period format (count = %d)\n", count);
         return -1;
     }
 
@@ -672,14 +789,43 @@ void handle_failed_connection_attempt(ThisPeer *peer)
 
 void handle_set_neighbors_response(ThisPeer *peer, Message *msgp)
 {
-    /* int ret; */
-
-    if (peer->state == STATE_OFF) return;
+    int sd, ret;
 
     if (peer->state == STATE_STARTING)
+    {
         printf("setting list of neighbors\n");
+
+        sd = socket(AF_INET, SOCK_STREAM, 0);
+        if (sd == -1)
+        {
+            perror("socket error");
+            printf("could not start listening for peers\n");
+            return;
+        }
+
+        ret = bind(sd, (struct sockaddr *)&peer->addr, sizeof(peer->addr));
+        if (ret == -1)
+        {
+            perror("bind error");
+            printf("could not start listening for peers\n");
+            return;
+        }
+
+        ret = listen(sd, 10);
+        if (ret == -1)
+        {
+            perror("listen error");
+            printf("could not start listening for peers\n");
+            return;
+        }
+        
+        peer->listening = sd;
+        add_desc(peer, sd);
+    }
     else
         printf("refreshing list of neighbors\n");
+    
+    if (peer->state == STATE_OFF) return;
 
     /* TODO free properly old list of peers */
     peer->neighbors.first = peer->neighbors.last = NULL;
@@ -694,7 +840,16 @@ void handle_set_neighbors_response(ThisPeer *peer, Message *msgp)
 
 /* ########## FUNCTIONS THAT HANDLE PEER REQUESTS ########## */
 
+void handle_req_data(ThisPeer *peer, Message *msgp, int sd)
+{
+    EntryList req_entries;
+    
+    init_entry_list(&req_entries);
+    deserialize_entries(msgp->body, &req_entries);
 
+    printf("required entries\n");
+    print_entries_asc(&req_entries);
+}
 
 
 
@@ -730,7 +885,40 @@ void demux_user_input(ThisPeer *peer)
 
 void demux_peer_request(ThisPeer *peer, int sd)
 {
+    Message msg;
+    int ret;
+    struct sockaddr_in addr;
+    socklen_t slen;
+
     printf("demultiplexing peer request\n");
+
+    if (sd == peer->listening)
+    {
+        printf("accepting peer connection\n");
+        slen = sizeof(addr);
+        ret = accept(sd, (struct sockaddr*)&addr, &slen);
+        if (ret == -1)
+        {
+            perror("accept error");
+            printf("could not accept peer conenction\n");
+            return;
+        }
+        printf("accepted\n");
+        add_desc(peer, ret);
+        return;
+    }
+
+    ret = recv_message(sd, &msg);
+    if (ret == -1)
+    {
+        printf("error receiving peer request\n");
+        return;
+    }
+
+    if (msg.type == MSG_REQ_DATA)
+    {
+        handle_req_data(peer, &msg, sd);
+    }
 }
 
 void demux_server_request(ThisPeer *peer)
