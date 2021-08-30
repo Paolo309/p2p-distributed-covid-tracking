@@ -554,7 +554,6 @@ char *deserialize_entries(char *buffer, EntryList *list)
 Entry *search_entry(Entry *from, time_t timestamp, int32_t flags, int32_t period_len)
 {
     Entry *entry, *model;
-    char tmp[TIMESTAMP_STRLEN];
 
     model = create_entry(timestamp, 0, 0, flags);
     model->period_len = period_len;
