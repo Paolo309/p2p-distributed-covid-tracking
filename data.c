@@ -80,6 +80,11 @@ Entry *create_entry(time_t timestamp, int32_t tamponi, int32_t nuovi_casi, uint8
 int cmp_entries(Entry *a, Entry *b)
 {
     int cmp_res;
+
+    /* printf("--- comparing\n");
+    print_entry(a);
+    printf("--- with\n");
+    print_entry(b); */
     
     cmp_res = a->timestamp - b->timestamp;
     if (cmp_res != 0)

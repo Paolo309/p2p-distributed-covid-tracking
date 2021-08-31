@@ -39,22 +39,55 @@ int validate_port(const char *str_port)
     return raw_port;
 }
 
+in_port_t get_port(int sd)
+{
+    struct sockaddr_in addr;
+    socklen_t slen = sizeof(addr);
+    int ret;
+
+    ret = getsockname(sd, (struct sockaddr *)&addr, &slen);
+
+    if (ret == -1)
+    {
+        perror("getsockname error");
+        return -1;
+    }
+    
+    return ntohs(addr.sin_port);
+}
 
 #define STATE_OFF 0
 #define STATE_STARTING 1
 #define STATE_STARTED 2
+#define STATE_STARTING_FLOOD 3
+#define STATE_HANDLING_FLOOD 4
+
 #define NUM_LAST_REQUESTS 3
+#define REQUESTER_SELF -1
 
 typedef struct ThisPeer {
+    /* address bound to this peer */
     struct sockaddr_in addr;
-    fd_set sockets;
-    int dserver, listening, fdmax;
-    int state;
+
+    /* main IO multiplexing */
+    fd_set master_read_set, master_write_set;
+    int dserver, listening, fdmax_r, fdmax_w;
     struct timeval timeout, *actual_timeout;
-    Graph neighbors;
+
+    /* state variables */
+    int state;
+    Graph neighbors; 
     EntryList entries;
+
+    /* handling flood requests */
     int last_requests[NUM_LAST_REQUESTS];
     int lr_head, lr_tail;
+    int32_t current_req_num;
+    EntryList *req_entries, *found_entries;
+    int requester_sd;
+    int nbrs_remaining;
+    Message *req_resp_msg;
+
 } ThisPeer;
 
 void init_peer(ThisPeer *peer, int host_port)
@@ -64,8 +97,9 @@ void init_peer(ThisPeer *peer, int host_port)
     peer->addr.sin_port = htons(host_port);
     peer->addr.sin_addr.s_addr = INADDR_ANY;
 
-    FD_ZERO(&peer->sockets);
-    peer->fdmax = 0;
+    FD_ZERO(&peer->master_read_set);
+    FD_ZERO(&peer->master_write_set);
+    peer->fdmax_r = peer->fdmax_w = 0;
     
     peer->dserver = -1;
     peer->listening = -1;
@@ -75,6 +109,8 @@ void init_peer(ThisPeer *peer, int host_port)
     memset(peer->last_requests, 0, sizeof(peer->last_requests));
     peer->lr_head = 0;
     peer->lr_tail = NUM_LAST_REQUESTS - 1;
+
+    peer->req_entries = peer->found_entries = NULL;
 
     create_graph(&peer->neighbors);
 }
@@ -98,7 +134,7 @@ void _remove_desc(fd_set *fdsetp, int *fdmax, int fd)
 
 void add_desc(ThisPeer *peer, int fd)
 {
-    _add_desc(&peer->sockets, &peer->fdmax, fd);
+    _add_desc(&peer->master_read_set, &peer->fdmax_r, fd);
     /* FD_SET(fd, &peer->sockets);
     
     if (fd > peer->fdmax)
@@ -107,7 +143,7 @@ void add_desc(ThisPeer *peer, int fd)
 
 void remove_desc(ThisPeer *peer, int fd)
 {
-    _remove_desc(&peer->sockets, &peer->fdmax, fd);
+    _remove_desc(&peer->master_read_set, &peer->fdmax_r, fd);
     /* FD_CLR(fd, &peer->sockets);
     
     if (fd == peer->fdmax)
@@ -141,7 +177,7 @@ void disable_user_input(ThisPeer *peer)
 
 bool is_user_input_enabled(ThisPeer *peer)
 {
-    return FD_ISSET(STDIN_FILENO, &peer->sockets);
+    return FD_ISSET(STDIN_FILENO, &peer->master_read_set);
 }
 
 void request_serviced(ThisPeer *peer, int req_num)
@@ -320,8 +356,9 @@ void get_aggr_tot(ThisPeer *peer, time_t beg_period, time_t end_period)
     int nbr_count;
     bool data_found;
     struct sockaddr_in *peers;
-    int32_t num_of_entries;
-    char *buf;
+    int32_t num_of_answers, num_of_entries;
+    /* char *buf, *buf_src, *buf_dest; */
+    char *buf_src;
 
     /* flags that the entry we're looking for must have:
         AGGREG_PERIOD : we're looking for an entry that covers a period
@@ -536,6 +573,54 @@ void get_aggr_tot(ThisPeer *peer, time_t beg_period, time_t end_period)
         return;
     }
 
+    /* flooding */
+
+    peer->req_entries = malloc(sizeof(EntryList));
+    init_entry_list(peer->req_entries);
+    /* merge_entry_lists(peer->req_entries, &totals_needed); */
+    peer->req_entries->first = totals_needed.first;
+    peer->req_entries->last = totals_needed.last;
+
+    peer->found_entries = malloc(sizeof(EntryList));
+    init_entry_list(peer->found_entries);
+
+    slen = sizeof(struct sockaddr_in);
+
+    nbr = peer->neighbors.first;
+    while (nbr)
+    {
+        sd = socket(AF_INET, SOCK_STREAM, 0);
+        if (sd == -1)
+        {
+            perror("socket error");
+            peer->req_entries = peer->found_entries = NULL;
+            return;
+        }
+
+        ret = connect(sd, (struct sockaddr *)&nbr->peer->addr, slen);
+        if (ret == -1)
+        {
+            perror("connect error");
+            peer->req_entries = peer->found_entries = NULL;
+            return;
+        }
+
+        _add_desc(&peer->master_write_set, &peer->fdmax_w, sd);
+        
+        nbr = nbr->next;
+    }
+
+    disable_user_input(peer);
+    srand(time(NULL) + peer->addr.sin_port);
+    set_timeout(peer, rand() % 4);
+
+    peer->state = STATE_STARTING_FLOOD;
+    peer->current_req_num = time(NULL);
+    peer->requester_sd = REQUESTER_SELF;
+    peer->nbrs_remaining = 0;
+
+    return;
+
 
 
     FD_ZERO(&nbrs_set);
@@ -543,8 +628,12 @@ void get_aggr_tot(ThisPeer *peer, time_t beg_period, time_t end_period)
     fdmax = -1;
     nbr_count = 0;
 
-
     slen = sizeof(struct sockaddr_in);
+
+    msg.type = MSG_FLOOD_FOR_ENTRIES;
+    msg.req_num = time(NULL);
+    msg.body_len = serialize_entries(msg.body, &totals_needed) - msg.body;
+    request_serviced(peer, msg.req_num);
 
     nbr = peer->neighbors.first;
     while (nbr)
@@ -562,9 +651,6 @@ void get_aggr_tot(ThisPeer *peer, time_t beg_period, time_t end_period)
             perror("connect error");
             return;
         }
-
-        msg.type = MSG_FLOOD_FOR_ENTRIES;
-        msg.body_len = serialize_entries(msg.body, &totals_needed) - msg.body;
         
         printf("asking entries to %d\n", ntohs(nbr->peer->addr.sin_port));
 
@@ -619,14 +705,23 @@ void get_aggr_tot(ThisPeer *peer, time_t beg_period, time_t end_period)
                 address(int32_t)port(int16_t)
              */
 
-            init_entry_list(&data_received);
-            buf = deserialize_entries(msg.body, &data_received);
+            buf_src = msg.body;
 
-            /*if (!is_entry_list_empty(&data_received))
+            num_of_answers = *(int32_t*)buf_src;
+            buf_src += sizeof(int32_t);
+            
+            for (j = 0; j < num_of_answers; j++) 
             {
-                printf("aggregate found in neighbor\n");
-                data_found = true;
-            } */
+                init_entry_list(&data_received);
+                deserialize_entries(buf_src, &data_received);
+
+                printf("answer %d of %d\n", j, num_of_answers);
+                print_entries_asc(&data_received);
+            }
+
+
+
+            /* buf = deserialize_entries(msg.body, &data_received);
 
             num_of_entries = *(int32_t*)msg.body;
             peers = calloc(num_of_entries, sizeof(struct sockaddr_in));
@@ -646,7 +741,7 @@ void get_aggr_tot(ThisPeer *peer, time_t beg_period, time_t end_period)
             for (j = 0; j < num_of_entries; j++)
             {
                 printf("peer %d\n", ntohs(peers[j].sin_port));
-            }
+            } */
             
             close(i);
             _remove_desc(&nbrs_set, &fdmax, i);
@@ -969,6 +1064,7 @@ void handle_failed_connection_attempt(ThisPeer *peer)
 void handle_set_neighbors_response(ThisPeer *peer, Message *msgp)
 {
     int sd, ret;
+    int reuse = 1;
 
     if (peer->state == STATE_STARTING)
     {
@@ -981,6 +1077,9 @@ void handle_set_neighbors_response(ThisPeer *peer, Message *msgp)
             printf("could not start listening for peers\n");
             return;
         }
+
+        if (setsockopt(sd, SOL_SOCKET, SO_REUSEADDR, (const char*)&reuse, sizeof(reuse)) < 0)
+            perror("setsockopt(SO_REUSEADDR) failed");
 
         ret = bind(sd, (struct sockaddr *)&peer->addr, sizeof(peer->addr));
         if (ret == -1)
@@ -1079,16 +1178,332 @@ void handle_req_data(ThisPeer *peer, Message *msgp, int sd)
     printf("entries sent to requester\n");
 }
 
+/* 
+
+
+ */
+
 void handle_flood_for_entries(ThisPeer *peer, Message *msgp, int sd)
 {
-    EntryList req_entries, found_entries;
+    EntryList empty_list_response;
     Entry *req_entry, *found_entry, *removed_entry;
+    int ret, nbr_sd;
+    GraphNode *nbr;
+    socklen_t slen;
+
+    printf("handling flood for entries for %d (sd: %d)\n", msgp->id, sd);
+    printf("req num: %d\n", msgp->req_num);
+    /* sleep(1); */
+
+    /* avoid servicing requests more than once */
+    /* cannot handle more than one request at once */
+    if (!valid_request(peer, msgp->req_num) || (peer->state != STATE_STARTED))
+    {
+        printf("request already handled, sending empty response\n");
+        /* TODO avoid serializing an empty list */
+        init_entry_list(&empty_list_response);
+        msgp->type = MSG_ENTRIES_FOUND;
+        msgp->id = ntohs(peer->addr.sin_port);
+        *(int32_t*)msgp->body = 0;
+        
+        msgp->body_len = 
+            serialize_entries(msgp->body + sizeof(int32_t), &empty_list_response)
+            - msgp->body;
+        ret = send_message(sd, msgp);
+        if (ret == -1)
+        {
+            printf("could not send empty FLOOD response\n");
+            return;
+        }
+        return;
+    }
+    request_serviced(peer, msgp->req_num);
+
+    printf("I've been asked to look for:\n");
+
+    peer->req_entries = malloc(sizeof(EntryList));
+    init_entry_list(peer->req_entries);
+    deserialize_entries(msgp->body, peer->req_entries);
+
+    print_entries_asc(peer->req_entries);
+
+    peer->found_entries = malloc(sizeof(EntryList));
+    init_entry_list(peer->found_entries);
+
+    req_entry = peer->req_entries->first;
+    while (req_entry != NULL) 
+    {
+        found_entry = search_entry(
+            peer->entries.last, 
+            req_entry->timestamp, 
+            req_entry->flags, 
+            req_entry->period_len
+        );
+
+        removed_entry = NULL;
+
+        if (found_entry != NULL)
+        {
+            add_entry(peer->found_entries, found_entry);
+
+            /* if ((found_entry->flags & ENTRY_SCOPE) == SCOPE_GLOBAL)
+            {
+                remove_entry(peer->req_entries, req_entry);
+                removed_entry = req_entry;
+            } */
+        }
+
+        req_entry = req_entry->next;  
+        free(removed_entry);  
+    }
+    
+    printf("I've got:\n");
+    print_entries_asc(peer->found_entries);
+
+    printf("Flooding for:\n");
+    print_entries_asc(peer->req_entries);
+
+    slen = sizeof(struct sockaddr_in);
+
+    nbr = peer->neighbors.first;
+    while (nbr)
+    {
+        nbr_sd = socket(AF_INET, SOCK_STREAM, 0);
+        if (nbr_sd == -1)
+        {
+            perror("socket error");
+            peer->req_entries = peer->found_entries = NULL;
+            return;
+        }
+
+        ret = connect(nbr_sd, (struct sockaddr *)&nbr->peer->addr, slen);
+        if (ret == -1)
+        {
+            perror("connect error");
+            peer->req_entries = peer->found_entries = NULL;
+            return;
+        }
+
+        printf("selecting neighbor (sd: %d) %d\n", nbr_sd, ntohs(nbr->peer->addr.sin_port));
+
+        _add_desc(&peer->master_write_set, &peer->fdmax_w, nbr_sd);
+        
+        nbr = nbr->next;
+    }
+
+    disable_user_input(peer);
+    srand(time(NULL) + peer->addr.sin_port);
+    set_timeout(peer, rand() % 4);
+
+    peer->state = STATE_HANDLING_FLOOD;
+    peer->current_req_num = msgp->req_num;
+    peer->requester_sd = sd;
+    peer->nbrs_remaining = 0;
+
+    peer->req_resp_msg = malloc(sizeof(Message));
+    peer->req_resp_msg->type = MSG_ENTRIES_FOUND;
+    peer->req_resp_msg->req_num = msgp->req_num;
+    peer->req_resp_msg->id = ntohs(peer->addr.sin_port);
+    peer->req_resp_msg->body_len = sizeof(int32_t);
+
+    if (!is_entry_list_empty(peer->found_entries))
+    {
+        printf("adding myself in\n");
+        *(int32_t*)peer->req_resp_msg->body = 1;
+    }
+    else
+    {
+        printf("NOT adding myself in\n");
+        *(int32_t*)peer->req_resp_msg->body = 0;
+    }
+}
+
+/* called for each socket write-ready */
+void do_flood_for_entries(ThisPeer *peer, int sd)
+{
+    Message msg;
+    int ret;
+
+    printf("actually sending FLOOD request to sd %d\n", sd);
+    /* sleep(1); */
+
+    msg.type = MSG_FLOOD_FOR_ENTRIES;
+    msg.req_num = peer->current_req_num;
+    msg.id = (uint32_t)ntohs(peer->addr.sin_port);
+    msg.body_len = serialize_entries(msg.body, peer->req_entries) - msg.body;
+
+    ret = send_message(sd, &msg);
+    if (ret == -1) 
+    {
+        printf("could not send FLOOD request\n");
+        return;
+    }
+
+    printf("sent request to neighbor (%d)\n", peer->nbrs_remaining);
+
+    _remove_desc(&peer->master_write_set, &peer->fdmax_w, sd);
+    _add_desc(&peer->master_read_set, &peer->fdmax_r, sd);
+
+    /* other sockets remain to write */
+    if (peer->fdmax_w != -1)
+        set_timeout(peer, rand() % 4);
+    else
+    {
+        printf("last request sent\n");
+        clear_timeout(peer);
+    }
+    
+    peer->nbrs_remaining++;
+}
+
+void handle_flood_response(ThisPeer *peer, Message *msgp, int sd)
+{
+    int ret, num_of_peers;
+    char *buf;
+    in_addr_t tmp_addr;
+    in_port_t tmp_port;
+    char str_addr[INET_ADDRSTRLEN];
+
+    printf("received flood response from %d (sd: %d)\n", msgp->id, sd);
+    /* sleep(1); */
+
+    if (peer->requester_sd != REQUESTER_SELF)
+    {
+        printf("relaying flood response\n");
+
+        if (peer->req_resp_msg == NULL)
+        {
+            printf("flood response already relayed\n");
+            return;
+        }
+
+        if (false)/* !is_entry_list_empty(peer->found_entries)) */
+        {
+            printf("adding myself in\n");
+
+            /* increment number of peers in response */
+            *(int32_t*)msgp->body += 1;
+
+            /* add this peer at back of response */
+            buf = msgp->body + msgp->body_len;
+            *(in_addr_t*)buf = peer->addr.sin_addr.s_addr;
+            buf += sizeof(in_addr_t);
+            *(in_port_t*)buf = peer->addr.sin_port;
+            msgp->body_len += sizeof(in_addr_t) + sizeof(in_port_t);
+        }
+
+        *(int32_t*)peer->req_resp_msg->body += *(int32_t*)msgp->body;
+
+        printf("new num of peers: %d\n", *(int32_t*)peer->req_resp_msg->body);
+
+        /* add this peer at back of response */
+        buf = peer->req_resp_msg->body + peer->req_resp_msg->body_len;
+        memcpy(buf, msgp->body + sizeof(int32_t), msgp->body_len - sizeof(int32_t));
+
+        *(in_addr_t*)buf = peer->addr.sin_addr.s_addr;
+        buf += sizeof(in_addr_t);
+        *(in_port_t*)buf = peer->addr.sin_port;
+
+        peer->req_resp_msg->body_len += sizeof(in_addr_t) + sizeof(in_port_t);
+
+        peer->req_resp_msg->type = MSG_ENTRIES_FOUND;
+        peer->req_resp_msg->req_num = peer->current_req_num;
+
+        if (peer->nbrs_remaining == 1)
+        {
+            printf("last response: sending it to sd %d\n", peer->requester_sd);
+            ret = send_message(peer->requester_sd, peer->req_resp_msg);
+            if (ret == -1)
+            {
+                printf("could not send (relay) FLOOD response\n");
+                return;
+            }
+
+            free(peer->req_resp_msg);
+            peer->req_resp_msg = NULL;
+        }
+    }
+    else
+    {
+        printf("I'm the last receiver\n");
+        buf = msgp->body;
+        num_of_peers = *(int32_t*)buf;
+        buf += sizeof(int32_t);
+
+        printf("%d peers have entries for me:\n", num_of_peers);
+
+        while (num_of_peers > 0)
+        {
+            tmp_addr = *(in_addr_t*)buf;
+            buf += sizeof(in_addr_t);
+            tmp_port = *(in_port_t*)buf;
+            buf += sizeof(in_port_t);
+
+            inet_ntop(AF_INET, &tmp_addr, str_addr, INET_ADDRSTRLEN);
+
+            printf("%s:%d\n", str_addr, ntohs(tmp_port));
+
+            num_of_peers--;
+        }
+    }
+
+    printf("done\n");
+
+    _remove_desc(&peer->master_read_set, &peer->fdmax_r, sd);
+
+    peer->nbrs_remaining--;
+
+    printf("%d neighbors remaining\n", peer->nbrs_remaining);
+
+    /* other sockets remain to read */
+    if (peer->nbrs_remaining > 0)
+    {
+        set_timeout(peer, rand() % 4);
+    }
+    else
+    {
+        printf("all expected responses received\n");
+        peer->state = STATE_STARTED;
+        clear_timeout(peer);
+        enable_user_input(peer);
+    }
+}
+
+void handle_flood_for_entries_NOPE(ThisPeer *peer, Message *msgp, int sd)
+{
+    EntryList req_entries, found_entries, data_received;
+    Entry *req_entry, *found_entry, *removed_entry;
+    GraphNode *nbr;
+    int ret, nbr_count;
+    Message msg;
+    socklen_t slen;
+    fd_set nbrs_set, working_set, send_set;
+    int i, fdmax_n, fdmax_s, desc_ready;
+    char *buf_src, *buf_dest;
+    int32_t num_of_answers, num_of_entries;
+    int j, k;
+    struct timeval timeout;
 
     printf("handling flood for entries\n");
 
     /* avoid servicing requests more than once */
     if (!valid_request(peer, msgp->req_num))
+    {
+        printf("request already handled, sending empty response\n");
+        init_entry_list(&found_entries);
+        msgp->type = MSG_ENTRIES_FOUND;
+        *(int32_t*)msgp->body = 1;
+        msgp->body_len = 
+            deserialize_entries(msgp->body + sizeof(int32_t), &found_entries)
+            - msgp->body;
+        ret = send_message(sd, msgp);
+        if (ret == -1)
+        {
+            printf("could not send empty FLOOD response\n");
+            return;
+        }
         return;
+    }
     request_serviced(peer, msgp->req_num);
     
     printf("I've been asked to look for:\n");
@@ -1104,7 +1519,7 @@ void handle_flood_for_entries(ThisPeer *peer, Message *msgp, int sd)
     while (req_entry != NULL) 
     {
         found_entry = search_entry(
-            &peer->entries, 
+            peer->entries.last, 
             req_entry->timestamp, 
             req_entry->flags, 
             req_entry->period_len
@@ -1119,11 +1534,185 @@ void handle_flood_for_entries(ThisPeer *peer, Message *msgp, int sd)
             removed_entry = req_entry;
         }
 
-        req_entry = req_entry->prev;  
+        req_entry = req_entry->next;  
         free(removed_entry);  
     }
     
+    printf("I've got:\n");
+    print_entries_asc(&found_entries);
+
+    printf("Flooding for:\n");
+    print_entries_asc(&req_entries);
+
+    FD_ZERO(&nbrs_set);
+    FD_ZERO(&working_set);
+    FD_ZERO(&send_set);
+    fdmax_n = -1;
+    fdmax_s = -1;
+    nbr_count = 0;
+
+    slen = sizeof(struct sockaddr_in);
+
+    msg.type = MSG_FLOOD_FOR_ENTRIES;
+    msg.req_num = msgp->req_num;
+
+    nbr = peer->neighbors.first;
+    while (nbr)
+    {
+        sd = socket(AF_INET, SOCK_STREAM, 0);
+        if (sd == -1)
+        {
+            perror("socket error");
+            return;
+        }
+
+        ret = connect(sd, (struct sockaddr *)&nbr->peer->addr, slen);
+        if (ret == -1)
+        {
+            perror("connect error");
+            return;
+        }
+
+        _add_desc(&nbrs_set, &fdmax_n, sd);
+        _add_desc(&send_set, &fdmax_s, sd);
+        nbr_count++;
+        
+        nbr = nbr->next;
+    }
+
+    j = nbr_count;
+
+    srand(time(NULL) + peer->addr.sin_port);
+
+    while (nbr_count > 0)
+    {
+        working_set = send_set;
+
+        timeout.tv_sec = rand() % 4;
+        timeout.tv_usec = 0;
+
+        desc_ready = select(fdmax_s + 1, NULL, &working_set, NULL, &timeout);
+        if (desc_ready == -1)
+        {
+            perror("select error");
+            return;
+        }
+
+        if (desc_ready == 0)
+        {
+            printf("timeout\n");
+            continue;
+        }
+
+        for (i = 0; i <= fdmax_n && desc_ready > 0; i++)
+        {
+            if (!FD_ISSET(i, &working_set)) continue;
+
+            desc_ready--;
+
+            msg.body_len = serialize_entries(msg.body, &req_entries) - msg.body;
+        
+            /* printf("asking entries to %d\n", ntohs(nbr->peer->addr.sin_port)); */
+
+            /* ret = send_message(sd, &msg);
+            if (ret == -1)
+            {
+                printf("could not send FLOOD to peer %d\n", ntohs(nbr->peer->addr.sin_port));
+                return;
+            } */
+
+            _remove_desc(&send_set, &fdmax_s, i);
+            nbr_count--;
+        }
+    }
+
+
+    nbr_count = j;
+
+    init_entry_list(&data_received);
+
+    msgp->type = MSG_ENTRIES_FOUND;
+    buf_dest = msgp->body + sizeof(int32_t);
+    num_of_answers = 0;
+
+    while (nbr_count > 0)
+    {
+        working_set = nbrs_set;
+
+        timeout.tv_sec = rand() % 4;
+        timeout.tv_usec = 0;
+
+        desc_ready = select(fdmax_n + 1, &working_set, NULL, NULL, &timeout);
+        if (desc_ready == -1)
+        {
+            perror("select error");
+            return;
+        }
+
+        if (desc_ready == 0)
+        {
+            printf("timeout\n");
+            continue;
+        }
+
+        for (i = 0; i <= fdmax_n && desc_ready > 0; i++)
+        {
+            if (!FD_ISSET(i, &working_set)) continue;
+
+            desc_ready--;
+
+            ret = recv_message(i, &msg);
+            if (ret == -1)
+            {
+                printf("error while receiving FLOOD results\n");
+                return;
+            }
+            /* check message type? */
+            
+            /* 
+            format of received messsage:
+            num_of_entries N
+            N serialized entries
+            N serialized peers
+
+            serialized peer:
+                address(int32_t)port(int16_t)
+             */
+
+            buf_src = msg.body;
+
+            num_of_answers += *(int32_t*)buf_src;
+            buf_src += sizeof(int32_t);
+
+            memcpy(buf_dest, buf_src, msg.body_len - sizeof(int32_t));
+            buf_dest += msg.body_len - sizeof(int32_t);
+
+            close(i);
+            _remove_desc(&nbrs_set, &fdmax_n, i);
+            nbr_count--;
+        }
+    }
+
+    *(int32_t*)msgp->body = num_of_answers + 1;
+    buf_dest = serialize_entries(buf_dest, &found_entries);
+    msgp->body_len = buf_dest - msgp->body;
+
+    ret = send_message(sd, msgp);
+    if (ret == -1)
+    {
+        printf("could not send reponse to FLOOD\n");
+        return;
+    }
+
+    printf("FLOOD response sent\n");
+
     /* 
+    int32_t num_of_answers
+    int32_t num_of_entries
+    in_addr_t addr
+    in_port_t port
+    [entry]
+
     message response format:
     M
     N0
@@ -1220,6 +1809,15 @@ void demux_peer_request(ThisPeer *peer, int sd)
         return;
     }
 
+    if (FD_ISSET(sd, &peer->master_write_set))
+    {
+        printf("socket ready to write\n");
+        if (peer->state == STATE_HANDLING_FLOOD ||
+            peer->state == STATE_STARTING_FLOOD)
+            do_flood_for_entries(peer, sd);
+        return;
+    }
+
     ret = recv_message(sd, &msg);
     if (ret == -1)
     {
@@ -1236,8 +1834,12 @@ void demux_peer_request(ThisPeer *peer, int sd)
     else if (msg.type == MSG_FLOOD_FOR_ENTRIES)
     {
         handle_flood_for_entries(peer, &msg, sd);
-        close(sd);
-        remove_desc(peer, sd);
+        /* close(sd);
+        remove_desc(peer, sd); */
+    }
+    else if (msg.type == MSG_ENTRIES_FOUND)
+    {
+        handle_flood_response(peer, &msg, sd);
     }
 }
 
@@ -1271,8 +1873,8 @@ void demux_server_request(ThisPeer *peer)
 int main(int argc, char** argv)
 {
     ThisPeer peer;
-    fd_set working_set;
-    int ret, i, desc_ready;
+    fd_set working_read_set, working_write_set;
+    int ret, i, fdmax, desc_ready;
     char register_file[30];
 
     if (argc != 2)
@@ -1298,7 +1900,12 @@ int main(int argc, char** argv)
 
     for (;;)
     {
-        working_set = peer.sockets;
+        working_read_set = peer.master_read_set;
+        working_write_set = peer.master_write_set;
+
+        fdmax = peer.fdmax_r;
+        if (peer.fdmax_w > fdmax)
+            fdmax = peer.fdmax_w;
 
         if (is_user_input_enabled(&peer))
         {
@@ -1306,7 +1913,13 @@ int main(int argc, char** argv)
             fflush(stdout);
         }
 
-        desc_ready = select(peer.fdmax + 1, &working_set, NULL, NULL, peer.actual_timeout);
+        desc_ready = select(
+            fdmax + 1, 
+            &working_read_set, 
+            &working_write_set, 
+            NULL, 
+            peer.actual_timeout
+        );
 
         if (desc_ready == -1)
         {
@@ -1318,11 +1931,15 @@ int main(int argc, char** argv)
         {
             if (peer.state == STATE_STARTING)
                 send_start_msg_to_dserver(&peer);
+            if (peer.state == STATE_HANDLING_FLOOD ||
+                peer.state == STATE_STARTING_FLOOD)
+                set_timeout(&peer, rand() % 4);
         }
 
-        for (i = 0; i <= peer.fdmax && desc_ready > 0; i++)
+        for (i = 0; i <= fdmax && desc_ready > 0; i++)
         {
-            if (!FD_ISSET(i, &working_set)) continue;
+            if (!FD_ISSET(i, &working_read_set) && 
+                !FD_ISSET(i, &working_write_set)) continue;
 
             desc_ready--;
 
