@@ -39,7 +39,7 @@ int validate_port(const char *str_port)
     return raw_port;
 }
 
-in_port_t get_port(int sd)
+/* in_port_t get_port(int sd)
 {
     struct sockaddr_in addr;
     socklen_t slen = sizeof(addr);
@@ -54,6 +54,55 @@ in_port_t get_port(int sd)
     }
     
     return ntohs(addr.sin_port);
+} */
+
+int32_t get_num_of_peers(Message *msgp)
+{
+    /* return *(int32_t*)msgp->body; */
+    return msgp->body_len / sizeof(in_port_t);
+}
+
+void set_num_of_peers(Message *msgp, int32_t num)
+{
+    /* return *(int32_t*)msgp->body = num; */
+    msgp->body_len = num * sizeof(in_port_t);
+}
+
+void inc_num_of_peers(Message *msgp, int32_t num)
+{
+    /* return *(int32_t*)msgp->body += num; */
+    msgp->body_len += num * sizeof(in_port_t);
+}
+
+int32_t add_peer_to_msg(Message *msgp, in_port_t port)
+{
+    int32_t num_of_peers = get_num_of_peers(msgp);
+
+    *((in_port_t*)msgp->body + num_of_peers) = port;
+    inc_num_of_peers(msgp, 1);
+    
+    return num_of_peers + 1;
+}
+
+int32_t merge_peer_list_msgs(Message *dest, Message *src)
+{
+    char *dest_body;
+    int32_t src_num_of_peers, dest_num_of_peers;
+
+    src_num_of_peers = get_num_of_peers(src);
+    dest_num_of_peers = get_num_of_peers(dest);
+
+    dest_body = dest->body + dest_num_of_peers * sizeof(in_port_t);
+
+    memcpy(dest_body, src->body, src_num_of_peers * sizeof(in_port_t));
+    inc_num_of_peers(dest, src_num_of_peers);
+
+    return src_num_of_peers + dest_num_of_peers;
+}
+
+in_port_t get_peer_port(Message *msgp, int n)
+{
+    return *((in_port_t*)msgp->body + n);
 }
 
 #define STATE_OFF 0
@@ -197,6 +246,12 @@ bool valid_request(ThisPeer *peer, int req_num)
     }
     return true;
 }
+
+uint32_t get_peer_id(ThisPeer *peer)
+{
+    return ntohs(peer->addr.sin_port);
+}
+
 
 int send_start_msg_to_dserver(ThisPeer *peer)
 {
@@ -1056,7 +1111,6 @@ void handle_flood_for_entries(ThisPeer *peer, Message *msgp, int sd)
     int ret, nbr_sd;
     GraphNode *nbr;
     socklen_t slen;
-    char *buf;
 
     printf("handling flood for entries for %d (sd: %d)\n", msgp->id, sd);
     printf("req num: %d\n", msgp->req_num);
@@ -1071,9 +1125,9 @@ void handle_flood_for_entries(ThisPeer *peer, Message *msgp, int sd)
         init_entry_list(&empty_list_response);
 
         msgp->type = MSG_ENTRIES_FOUND;
-        msgp->id = ntohs(peer->addr.sin_port);
-        *(int32_t*)msgp->body = 0;
-        msgp->body_len = sizeof(int32_t);
+        msgp->id = get_peer_id(peer);
+        
+        set_num_of_peers(msgp, 0);
         
         ret = send_message(sd, msgp);
         if (ret == -1)
@@ -1188,35 +1242,19 @@ void handle_flood_for_entries(ThisPeer *peer, Message *msgp, int sd)
     peer->req_resp_msg = malloc(sizeof(Message));
     peer->req_resp_msg->type = MSG_ENTRIES_FOUND;
     peer->req_resp_msg->req_num = msgp->req_num;
-    peer->req_resp_msg->id = ntohs(peer->addr.sin_port); /* for debugging */
+    peer->req_resp_msg->id = get_peer_id(peer); /* for debugging */
+    set_num_of_peers(peer->req_resp_msg, 0);
 
     /* if this peer has some of the requested entries */
     if (!is_entry_list_empty(peer->found_entries))
     {
         /* add this peer to the aggregated response message */
-
         printf("adding myself in\n");
-
-        buf = peer->req_resp_msg->body;
-
-        /* TODO maybe create a (de)serialize function */
-        *(int32_t*)buf = 1;
-        buf += sizeof(int32_t);
-
-        *(in_addr_t*)buf = peer->addr.sin_addr.s_addr;
-        buf += sizeof(in_addr_t);
-
-        *(in_port_t*)buf = peer->addr.sin_port;
-        buf += sizeof(in_port_t);
-
-        peer->req_resp_msg->body_len = buf - peer->req_resp_msg->body;
+        add_peer_to_msg(peer->req_resp_msg, ntohs(peer->addr.sin_port));
     }
     else
     {
         printf("NOT adding myself in\n");
-
-        *(int32_t*)peer->req_resp_msg->body = 0;
-        peer->req_resp_msg->body_len = sizeof(int32_t);
     }
 }
 
@@ -1237,7 +1275,7 @@ void do_flood_for_entries(ThisPeer *peer, int sd)
 
     msg.type = MSG_FLOOD_FOR_ENTRIES;
     msg.req_num = peer->current_req_num;
-    msg.id = (uint32_t)ntohs(peer->addr.sin_port);
+    msg.id = get_peer_id(peer);
     msg.body_len = serialize_entries(msg.body, peer->req_entries) - msg.body;
 
     ret = send_message(sd, &msg);
@@ -1276,10 +1314,7 @@ void do_flood_for_entries(ThisPeer *peer, int sd)
 void handle_flood_response(ThisPeer *peer, Message *msgp, int sd)
 {
     int ret, num_of_peers;
-    char *buf;
-    in_addr_t tmp_addr;
-    in_port_t tmp_port;
-    char str_addr[INET_ADDRSTRLEN];
+    in_port_t *peers;
 
     printf("received flood response from %d (sd: %d)\n", msgp->id, sd);
 
@@ -1295,18 +1330,15 @@ void handle_flood_response(ThisPeer *peer, Message *msgp, int sd)
             return;
         }
 
+        num_of_peers = get_num_of_peers(msgp);
+        printf("received num of peers: %d\n", num_of_peers);
+
         /* updating the number of peers that satisfy the request in 
             the aggregated response message */
-        num_of_peers = *(int32_t*)msgp->body;
-        *(int32_t*)peer->req_resp_msg->body += num_of_peers;
-
-        printf("received num of peers: %d\n", num_of_peers);
-        printf("new num of peers: %d\n", *(int32_t*)peer->req_resp_msg->body);
-
-        /* add the received response to this peer's aggregated response */
-        buf = peer->req_resp_msg->body + peer->req_resp_msg->body_len;
-        memcpy(buf, msgp->body + sizeof(int32_t), msgp->body_len - sizeof(int32_t));
-        peer->req_resp_msg->body_len += msgp->body_len - sizeof(int32_t);
+        
+        merge_peer_list_msgs(peer->req_resp_msg, msgp);
+        
+        printf("new num of peers: %d\n", get_num_of_peers(peer->req_resp_msg));
 
         /* this is the last response message */
         if (peer->nbrs_remaining == 1)
@@ -1332,27 +1364,15 @@ void handle_flood_response(ThisPeer *peer, Message *msgp, int sd)
     /* if this peer IS the one requesting the flood */
     else
     {
-        buf = msgp->body;
+        peers = (in_port_t*)msgp->body;
 
-        num_of_peers = *(int32_t*)buf;
-        buf += sizeof(int32_t);
+        num_of_peers = get_num_of_peers(msgp);
 
         printf("%d peers have entries for me:\n", num_of_peers);
 
         /* deserializing received peers addresses */
-        while (num_of_peers > 0)
-        {
-            tmp_addr = *(in_addr_t*)buf;
-            buf += sizeof(in_addr_t);
-            tmp_port = *(in_port_t*)buf;
-            buf += sizeof(in_port_t);
-
-            inet_ntop(AF_INET, &tmp_addr, str_addr, INET_ADDRSTRLEN);
-
-            printf("%s:%d\n", str_addr, ntohs(tmp_port));
-
-            num_of_peers--;
-        }
+        while (num_of_peers >= 0)
+            printf("peer: %d\n", peers[--num_of_peers]);
     }
 
     /* TODO check when to close the sockets (in demux? really?) */
@@ -1366,15 +1386,15 @@ void handle_flood_response(ThisPeer *peer, Message *msgp, int sd)
     if (peer->nbrs_remaining > 0)
     {
         set_timeout(peer, rand() % 4);
+        return;
     }
-    else
-    {
-        printf("all expected responses received\n");
-        
-        peer->state = STATE_STARTED;
-        clear_timeout(peer);
-        enable_user_input(peer);
-    }
+    
+    printf("all expected responses received\n");
+    
+    peer->state = STATE_STARTED;
+    clear_timeout(peer);
+    enable_user_input(peer);
+
 }
 
 
