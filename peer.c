@@ -611,146 +611,12 @@ void get_aggr_tot(ThisPeer *peer, time_t beg_period, time_t end_period)
     }
 
     disable_user_input(peer);
-    srand(time(NULL) + peer->addr.sin_port);
     set_timeout(peer, rand() % 4);
 
     peer->state = STATE_STARTING_FLOOD;
-    peer->current_req_num = time(NULL);
+    peer->current_req_num = rand();
     peer->requester_sd = REQUESTER_SELF;
     peer->nbrs_remaining = 0;
-
-    return;
-
-
-
-    FD_ZERO(&nbrs_set);
-    FD_ZERO(&working_set);
-    fdmax = -1;
-    nbr_count = 0;
-
-    slen = sizeof(struct sockaddr_in);
-
-    msg.type = MSG_FLOOD_FOR_ENTRIES;
-    msg.req_num = time(NULL);
-    msg.body_len = serialize_entries(msg.body, &totals_needed) - msg.body;
-    request_serviced(peer, msg.req_num);
-
-    nbr = peer->neighbors.first;
-    while (nbr)
-    {
-        sd = socket(AF_INET, SOCK_STREAM, 0);
-        if (sd == -1)
-        {
-            perror("socket error");
-            return;
-        }
-
-        ret = connect(sd, (struct sockaddr *)&nbr->peer->addr, slen);
-        if (ret == -1)
-        {
-            perror("connect error");
-            return;
-        }
-        
-        printf("asking entries to %d\n", ntohs(nbr->peer->addr.sin_port));
-
-        ret = send_message(sd, &msg);
-        if (ret == -1)
-        {
-            printf("could not send REQ_DATA to peer %d\n", ntohs(nbr->peer->addr.sin_port));
-            return;
-        }
-
-        _add_desc(&nbrs_set, &fdmax, sd);
-        nbr_count++;
-        
-        nbr = nbr->next;
-    }
-
-    /* TODO should free data_received */
-    init_entry_list(&data_received);
-
-    while (nbr_count > 0)
-    {
-        working_set = nbrs_set;
-
-        desc_ready = select(fdmax + 1, &working_set, NULL, NULL, NULL);
-        if (desc_ready == -1)
-        {
-            perror("select error");
-            return;
-        }
-
-        for (i = 0; i <= fdmax && desc_ready > 0; i++)
-        {
-            if (!FD_ISSET(i, &working_set)) continue;
-
-            desc_ready--;
-
-            ret = recv_message(i, &msg);
-            if (ret == -1)
-            {
-                printf("error while receiving FLOOD results\n");
-                return;
-            }
-            /* check message type? */
-            
-            /* 
-            format of received messsage:
-            num_of_entries N
-            N serialized entries
-            N serialized peers
-
-            serialized peer:
-                address(int32_t)port(int16_t)
-             */
-
-            buf_src = msg.body;
-
-            num_of_answers = *(int32_t*)buf_src;
-            buf_src += sizeof(int32_t);
-            
-            for (j = 0; j < num_of_answers; j++) 
-            {
-                init_entry_list(&data_received);
-                deserialize_entries(buf_src, &data_received);
-
-                printf("answer %d of %d\n", j, num_of_answers);
-                print_entries_asc(&data_received);
-            }
-
-
-
-            /* buf = deserialize_entries(msg.body, &data_received);
-
-            num_of_entries = *(int32_t*)msg.body;
-            peers = calloc(num_of_entries, sizeof(struct sockaddr_in));
-            memset(peer, 0, num_of_entries * sizeof(struct sockaddr_in));
-
-            for (j = 0; j < num_of_entries; j++)
-            {
-                peers[j].sin_family = AF_INET6;
-                
-                peers[j].sin_addr.s_addr = ntohl(*(in_addr_t*)buf);
-                buf += sizeof(in_addr_t);
-                peers[j].sin_port = *(in_port_t*)buf;
-                buf += sizeof(in_port_t);
-            }
-
-            printf("peers that have my entries:\n");
-            for (j = 0; j < num_of_entries; j++)
-            {
-                printf("peer %d\n", ntohs(peers[j].sin_port));
-            } */
-            
-            close(i);
-            _remove_desc(&nbrs_set, &fdmax, i);
-            nbr_count--;
-        }
-    }
-    
-
-    printf("END WIP\n");
 }
 
 
@@ -1190,25 +1056,25 @@ void handle_flood_for_entries(ThisPeer *peer, Message *msgp, int sd)
     int ret, nbr_sd;
     GraphNode *nbr;
     socklen_t slen;
+    char *buf;
 
     printf("handling flood for entries for %d (sd: %d)\n", msgp->id, sd);
     printf("req num: %d\n", msgp->req_num);
-    /* sleep(1); */
 
     /* avoid servicing requests more than once */
     /* cannot handle more than one request at once */
     if (!valid_request(peer, msgp->req_num) || (peer->state != STATE_STARTED))
     {
         printf("request already handled, sending empty response\n");
-        /* TODO avoid serializing an empty list */
+        
+        /* TODO needed? */
         init_entry_list(&empty_list_response);
+
         msgp->type = MSG_ENTRIES_FOUND;
         msgp->id = ntohs(peer->addr.sin_port);
         *(int32_t*)msgp->body = 0;
+        msgp->body_len = sizeof(int32_t);
         
-        msgp->body_len = 
-            serialize_entries(msgp->body + sizeof(int32_t), &empty_list_response)
-            - msgp->body;
         ret = send_message(sd, msgp);
         if (ret == -1)
         {
@@ -1221,14 +1087,21 @@ void handle_flood_for_entries(ThisPeer *peer, Message *msgp, int sd)
 
     printf("I've been asked to look for:\n");
 
+    /* reading requested entries */
     peer->req_entries = malloc(sizeof(EntryList));
     init_entry_list(peer->req_entries);
     deserialize_entries(msgp->body, peer->req_entries);
 
     print_entries_asc(peer->req_entries);
 
+    /* TODO it's redauntant */
     peer->found_entries = malloc(sizeof(EntryList));
     init_entry_list(peer->found_entries);
+
+    /* iterating through requested entries and searching them in the 
+        register. The ones that are not found, or are found but have
+        SCOPE_LOCAL, are put into req_entries to be asked to this
+        peer's neighbors. */
 
     req_entry = peer->req_entries->first;
     while (req_entry != NULL) 
@@ -1246,11 +1119,14 @@ void handle_flood_for_entries(ThisPeer *peer, Message *msgp, int sd)
         {
             add_entry(peer->found_entries, found_entry);
 
-            /* if ((found_entry->flags & ENTRY_SCOPE) == SCOPE_GLOBAL)
+            /* global entries have the same value for all the peers.
+                The neighbors wont be asked for global entries if this
+                peer already has some of them */
+            if ((found_entry->flags & ENTRY_SCOPE) == SCOPE_GLOBAL)
             {
                 remove_entry(peer->req_entries, req_entry);
                 removed_entry = req_entry;
-            } */
+            }
         }
 
         req_entry = req_entry->next;  
@@ -1264,6 +1140,11 @@ void handle_flood_for_entries(ThisPeer *peer, Message *msgp, int sd)
     print_entries_asc(peer->req_entries);
 
     slen = sizeof(struct sockaddr_in);
+
+    /* establishing connections with neighbors */
+    /* A request will be actually sent to a neighbor when it will
+        accept the connection (when the socket is ready to write).
+       When a socket is ready to write, do_flood_for_entries is called. */
 
     nbr = peer->neighbors.first;
     while (nbr)
@@ -1291,41 +1172,68 @@ void handle_flood_for_entries(ThisPeer *peer, Message *msgp, int sd)
         nbr = nbr->next;
     }
 
+    peer->state = STATE_HANDLING_FLOOD;
+
+    /* configuring main IO multiplexing */
     disable_user_input(peer);
-    srand(time(NULL) + peer->addr.sin_port);
     set_timeout(peer, rand() % 4);
 
-    peer->state = STATE_HANDLING_FLOOD;
+    /* configuring request-handling data */
     peer->current_req_num = msgp->req_num;
     peer->requester_sd = sd;
-    peer->nbrs_remaining = 0;
+    peer->nbrs_remaining = 0; /* how many nbrs accepted the connection */
 
+    /* creating aggregated response message */
+    /* each nbr response is added to this message's body */
     peer->req_resp_msg = malloc(sizeof(Message));
     peer->req_resp_msg->type = MSG_ENTRIES_FOUND;
     peer->req_resp_msg->req_num = msgp->req_num;
-    peer->req_resp_msg->id = ntohs(peer->addr.sin_port);
-    peer->req_resp_msg->body_len = sizeof(int32_t);
+    peer->req_resp_msg->id = ntohs(peer->addr.sin_port); /* for debugging */
 
+    /* if this peer has some of the requested entries */
     if (!is_entry_list_empty(peer->found_entries))
     {
+        /* add this peer to the aggregated response message */
+
         printf("adding myself in\n");
-        *(int32_t*)peer->req_resp_msg->body = 1;
+
+        buf = peer->req_resp_msg->body;
+
+        /* TODO maybe create a (de)serialize function */
+        *(int32_t*)buf = 1;
+        buf += sizeof(int32_t);
+
+        *(in_addr_t*)buf = peer->addr.sin_addr.s_addr;
+        buf += sizeof(in_addr_t);
+
+        *(in_port_t*)buf = peer->addr.sin_port;
+        buf += sizeof(in_port_t);
+
+        peer->req_resp_msg->body_len = buf - peer->req_resp_msg->body;
     }
     else
     {
         printf("NOT adding myself in\n");
+
         *(int32_t*)peer->req_resp_msg->body = 0;
+        peer->req_resp_msg->body_len = sizeof(int32_t);
     }
 }
 
 /* called for each socket write-ready */
+/**
+ * Send a FLOOD_FOR_ENTRIES message using the specified socket, with
+ * entries previously in peer->req_entries.
+ * 
+ * @param peer 
+ * @param sd socket ready to write
+ */
 void do_flood_for_entries(ThisPeer *peer, int sd)
 {
     Message msg;
     int ret;
 
     printf("actually sending FLOOD request to sd %d\n", sd);
-    /* sleep(1); */
 
     msg.type = MSG_FLOOD_FOR_ENTRIES;
     msg.req_num = peer->current_req_num;
@@ -1341,10 +1249,12 @@ void do_flood_for_entries(ThisPeer *peer, int sd)
 
     printf("sent request to neighbor (%d)\n", peer->nbrs_remaining);
 
+    /* moving the socket from the write set, to the read set */
     _remove_desc(&peer->master_write_set, &peer->fdmax_w, sd);
     _add_desc(&peer->master_read_set, &peer->fdmax_r, sd);
 
-    /* other sockets remain to write */
+    /* TODO write a better condition */
+    /* write set not completely empty -> other sockets remain to write */
     if (peer->fdmax_w != -1)
         set_timeout(peer, rand() % 4);
     else
@@ -1356,6 +1266,13 @@ void do_flood_for_entries(ThisPeer *peer, int sd)
     peer->nbrs_remaining++;
 }
 
+/**
+ * Handle an ENTRIES_FOUND response message (response to FLOOD_FOR_ENTRIES).
+ * 
+ * @param peer 
+ * @param msgp message received
+ * @param sd socket from which the message was received
+ */
 void handle_flood_response(ThisPeer *peer, Message *msgp, int sd)
 {
     int ret, num_of_peers;
@@ -1365,53 +1282,42 @@ void handle_flood_response(ThisPeer *peer, Message *msgp, int sd)
     char str_addr[INET_ADDRSTRLEN];
 
     printf("received flood response from %d (sd: %d)\n", msgp->id, sd);
-    /* sleep(1); */
 
+    /* if this peer is NOT the one requesting the flood */
     if (peer->requester_sd != REQUESTER_SELF)
     {
         printf("relaying flood response\n");
 
+        /* TODO check if really needed */
         if (peer->req_resp_msg == NULL)
         {
             printf("flood response already relayed\n");
             return;
         }
 
-        if (false)/* !is_entry_list_empty(peer->found_entries)) */
-        {
-            printf("adding myself in\n");
+        /* updating the number of peers that satisfy the request in 
+            the aggregated response message */
+        num_of_peers = *(int32_t*)msgp->body;
+        *(int32_t*)peer->req_resp_msg->body += num_of_peers;
 
-            /* increment number of peers in response */
-            *(int32_t*)msgp->body += 1;
-
-            /* add this peer at back of response */
-            buf = msgp->body + msgp->body_len;
-            *(in_addr_t*)buf = peer->addr.sin_addr.s_addr;
-            buf += sizeof(in_addr_t);
-            *(in_port_t*)buf = peer->addr.sin_port;
-            msgp->body_len += sizeof(in_addr_t) + sizeof(in_port_t);
-        }
-
-        *(int32_t*)peer->req_resp_msg->body += *(int32_t*)msgp->body;
-
+        printf("received num of peers: %d\n", num_of_peers);
         printf("new num of peers: %d\n", *(int32_t*)peer->req_resp_msg->body);
 
-        /* add this peer at back of response */
+        /* add the received response to this peer's aggregated response */
         buf = peer->req_resp_msg->body + peer->req_resp_msg->body_len;
         memcpy(buf, msgp->body + sizeof(int32_t), msgp->body_len - sizeof(int32_t));
+        peer->req_resp_msg->body_len += msgp->body_len - sizeof(int32_t);
 
-        *(in_addr_t*)buf = peer->addr.sin_addr.s_addr;
-        buf += sizeof(in_addr_t);
-        *(in_port_t*)buf = peer->addr.sin_port;
-
-        peer->req_resp_msg->body_len += sizeof(in_addr_t) + sizeof(in_port_t);
-
-        peer->req_resp_msg->type = MSG_ENTRIES_FOUND;
-        peer->req_resp_msg->req_num = peer->current_req_num;
-
+        /* this is the last response message */
         if (peer->nbrs_remaining == 1)
         {
+            /* sending back this peer's aggregated response */
+
+            peer->req_resp_msg->type = MSG_ENTRIES_FOUND;
+            peer->req_resp_msg->req_num = peer->current_req_num;
+
             printf("last response: sending it to sd %d\n", peer->requester_sd);
+            
             ret = send_message(peer->requester_sd, peer->req_resp_msg);
             if (ret == -1)
             {
@@ -1423,15 +1329,17 @@ void handle_flood_response(ThisPeer *peer, Message *msgp, int sd)
             peer->req_resp_msg = NULL;
         }
     }
+    /* if this peer IS the one requesting the flood */
     else
     {
-        printf("I'm the last receiver\n");
         buf = msgp->body;
+
         num_of_peers = *(int32_t*)buf;
         buf += sizeof(int32_t);
 
         printf("%d peers have entries for me:\n", num_of_peers);
 
+        /* deserializing received peers addresses */
         while (num_of_peers > 0)
         {
             tmp_addr = *(in_addr_t*)buf;
@@ -1447,13 +1355,12 @@ void handle_flood_response(ThisPeer *peer, Message *msgp, int sd)
         }
     }
 
-    printf("done\n");
-
+    /* TODO check when to close the sockets (in demux? really?) */
     _remove_desc(&peer->master_read_set, &peer->fdmax_r, sd);
 
     peer->nbrs_remaining--;
 
-    printf("%d neighbors remaining\n", peer->nbrs_remaining);
+    printf("waiting for %d more responses\n", peer->nbrs_remaining);
 
     /* other sockets remain to read */
     if (peer->nbrs_remaining > 0)
@@ -1463,294 +1370,11 @@ void handle_flood_response(ThisPeer *peer, Message *msgp, int sd)
     else
     {
         printf("all expected responses received\n");
+        
         peer->state = STATE_STARTED;
         clear_timeout(peer);
         enable_user_input(peer);
     }
-}
-
-void handle_flood_for_entries_NOPE(ThisPeer *peer, Message *msgp, int sd)
-{
-    EntryList req_entries, found_entries, data_received;
-    Entry *req_entry, *found_entry, *removed_entry;
-    GraphNode *nbr;
-    int ret, nbr_count;
-    Message msg;
-    socklen_t slen;
-    fd_set nbrs_set, working_set, send_set;
-    int i, fdmax_n, fdmax_s, desc_ready;
-    char *buf_src, *buf_dest;
-    int32_t num_of_answers, num_of_entries;
-    int j, k;
-    struct timeval timeout;
-
-    printf("handling flood for entries\n");
-
-    /* avoid servicing requests more than once */
-    if (!valid_request(peer, msgp->req_num))
-    {
-        printf("request already handled, sending empty response\n");
-        init_entry_list(&found_entries);
-        msgp->type = MSG_ENTRIES_FOUND;
-        *(int32_t*)msgp->body = 1;
-        msgp->body_len = 
-            deserialize_entries(msgp->body + sizeof(int32_t), &found_entries)
-            - msgp->body;
-        ret = send_message(sd, msgp);
-        if (ret == -1)
-        {
-            printf("could not send empty FLOOD response\n");
-            return;
-        }
-        return;
-    }
-    request_serviced(peer, msgp->req_num);
-    
-    printf("I've been asked to look for:\n");
-
-    init_entry_list(&req_entries);
-    deserialize_entries(msgp->body, &req_entries);
-
-    print_entries_asc(&req_entries);
-
-    init_entry_list(&found_entries);
-
-    req_entry = req_entries.first;
-    while (req_entry != NULL) 
-    {
-        found_entry = search_entry(
-            peer->entries.last, 
-            req_entry->timestamp, 
-            req_entry->flags, 
-            req_entry->period_len
-        );
-
-        removed_entry = NULL;
-
-        if (found_entry != NULL)
-        {
-            add_entry(&found_entries, found_entry);
-            remove_entry(&req_entries, req_entry);
-            removed_entry = req_entry;
-        }
-
-        req_entry = req_entry->next;  
-        free(removed_entry);  
-    }
-    
-    printf("I've got:\n");
-    print_entries_asc(&found_entries);
-
-    printf("Flooding for:\n");
-    print_entries_asc(&req_entries);
-
-    FD_ZERO(&nbrs_set);
-    FD_ZERO(&working_set);
-    FD_ZERO(&send_set);
-    fdmax_n = -1;
-    fdmax_s = -1;
-    nbr_count = 0;
-
-    slen = sizeof(struct sockaddr_in);
-
-    msg.type = MSG_FLOOD_FOR_ENTRIES;
-    msg.req_num = msgp->req_num;
-
-    nbr = peer->neighbors.first;
-    while (nbr)
-    {
-        sd = socket(AF_INET, SOCK_STREAM, 0);
-        if (sd == -1)
-        {
-            perror("socket error");
-            return;
-        }
-
-        ret = connect(sd, (struct sockaddr *)&nbr->peer->addr, slen);
-        if (ret == -1)
-        {
-            perror("connect error");
-            return;
-        }
-
-        _add_desc(&nbrs_set, &fdmax_n, sd);
-        _add_desc(&send_set, &fdmax_s, sd);
-        nbr_count++;
-        
-        nbr = nbr->next;
-    }
-
-    j = nbr_count;
-
-    srand(time(NULL) + peer->addr.sin_port);
-
-    while (nbr_count > 0)
-    {
-        working_set = send_set;
-
-        timeout.tv_sec = rand() % 4;
-        timeout.tv_usec = 0;
-
-        desc_ready = select(fdmax_s + 1, NULL, &working_set, NULL, &timeout);
-        if (desc_ready == -1)
-        {
-            perror("select error");
-            return;
-        }
-
-        if (desc_ready == 0)
-        {
-            printf("timeout\n");
-            continue;
-        }
-
-        for (i = 0; i <= fdmax_n && desc_ready > 0; i++)
-        {
-            if (!FD_ISSET(i, &working_set)) continue;
-
-            desc_ready--;
-
-            msg.body_len = serialize_entries(msg.body, &req_entries) - msg.body;
-        
-            /* printf("asking entries to %d\n", ntohs(nbr->peer->addr.sin_port)); */
-
-            /* ret = send_message(sd, &msg);
-            if (ret == -1)
-            {
-                printf("could not send FLOOD to peer %d\n", ntohs(nbr->peer->addr.sin_port));
-                return;
-            } */
-
-            _remove_desc(&send_set, &fdmax_s, i);
-            nbr_count--;
-        }
-    }
-
-
-    nbr_count = j;
-
-    init_entry_list(&data_received);
-
-    msgp->type = MSG_ENTRIES_FOUND;
-    buf_dest = msgp->body + sizeof(int32_t);
-    num_of_answers = 0;
-
-    while (nbr_count > 0)
-    {
-        working_set = nbrs_set;
-
-        timeout.tv_sec = rand() % 4;
-        timeout.tv_usec = 0;
-
-        desc_ready = select(fdmax_n + 1, &working_set, NULL, NULL, &timeout);
-        if (desc_ready == -1)
-        {
-            perror("select error");
-            return;
-        }
-
-        if (desc_ready == 0)
-        {
-            printf("timeout\n");
-            continue;
-        }
-
-        for (i = 0; i <= fdmax_n && desc_ready > 0; i++)
-        {
-            if (!FD_ISSET(i, &working_set)) continue;
-
-            desc_ready--;
-
-            ret = recv_message(i, &msg);
-            if (ret == -1)
-            {
-                printf("error while receiving FLOOD results\n");
-                return;
-            }
-            /* check message type? */
-            
-            /* 
-            format of received messsage:
-            num_of_entries N
-            N serialized entries
-            N serialized peers
-
-            serialized peer:
-                address(int32_t)port(int16_t)
-             */
-
-            buf_src = msg.body;
-
-            num_of_answers += *(int32_t*)buf_src;
-            buf_src += sizeof(int32_t);
-
-            memcpy(buf_dest, buf_src, msg.body_len - sizeof(int32_t));
-            buf_dest += msg.body_len - sizeof(int32_t);
-
-            close(i);
-            _remove_desc(&nbrs_set, &fdmax_n, i);
-            nbr_count--;
-        }
-    }
-
-    *(int32_t*)msgp->body = num_of_answers + 1;
-    buf_dest = serialize_entries(buf_dest, &found_entries);
-    msgp->body_len = buf_dest - msgp->body;
-
-    ret = send_message(sd, msgp);
-    if (ret == -1)
-    {
-        printf("could not send reponse to FLOOD\n");
-        return;
-    }
-
-    printf("FLOOD response sent\n");
-
-    /* 
-    int32_t num_of_answers
-    int32_t num_of_entries
-    in_addr_t addr
-    in_port_t port
-    [entry]
-
-    message response format:
-    M
-    N0
-    addr0
-    port0
-    entry[0][0]
-    entry[0][1]
-    ...
-    entry[0][N0-1]
-    N1
-    addr1
-    port1
-    entry[1][0]
-    entry[1][1]
-    ...
-    entry[1][N1-1]
-    ...
-    ...
-    N[M-1]
-    addr1
-    port1
-    entry[M-1][0]
-    entry[M-1][1]
-    ...
-    entry[M-1][N[M-1]-1]
-     */
-
-    /* put in message body the list of entries and my address
-        accprding to the format above
-     */
-    
-    /* flood for entries other peers exactly like the first peer did
-        but excluding the one that has made the request
-
-        for each response, push response, as it is, into message body
-     */
-
-    
 }
 
 
@@ -1791,11 +1415,11 @@ void demux_peer_request(ThisPeer *peer, int sd)
     struct sockaddr_in addr;
     socklen_t slen;
 
-    printf("\ndemultiplexing peer request\n");
+    printf("\n");
+    /* printf("\n[demultiplexing peer request]\n"); */
 
     if (sd == peer->listening)
     {
-        printf("accepting peer connection\n");
         slen = sizeof(addr);
         ret = accept(sd, (struct sockaddr*)&addr, &slen);
         if (ret == -1)
@@ -1804,7 +1428,7 @@ void demux_peer_request(ThisPeer *peer, int sd)
             printf("could not accept peer conenction\n");
             return;
         }
-        printf("accepted\n");
+        printf("accepted connection to peer (sd: %d)\n", ret);
         add_desc(peer, ret);
         return;
     }
@@ -1848,7 +1472,8 @@ void demux_server_request(ThisPeer *peer)
     Message msg;
     int ret;
 
-    printf("\ndemultiplexing server request\n");
+    printf("\n");
+    /* printf("\n[demultiplexing server request]\n"); */
 
     ret = recv_message(peer->dserver, &msg);
 
@@ -1890,6 +1515,8 @@ int main(int argc, char** argv)
     printf("PEER %d\n", ret);
 
     init_peer(&peer, ret);
+
+    srand(time(NULL) + peer.addr.sin_port);
 
     /* TODO check if file was opened successfully */
     sprintf(register_file, "reg_%d.txt", ret);
