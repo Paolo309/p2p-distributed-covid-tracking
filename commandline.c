@@ -10,14 +10,21 @@
 char **get_command_line(int *argc)
 {
     wordexp_t p;
-    int i, len;
+    int i, len, check;
     char buffer[MAX_CMD_LEN];
     char **argv;
 
     if (argc == NULL) return NULL;
     
     /* https://www.adoclib.com/blog/how-to-read-from-input-until-newline-is-found-using-scanf.html */
-    scanf("%[^\n]%*c", buffer);
+    check = scanf("%[^\n]%*c", buffer);
+    
+    if (check == 0)
+    {
+        getchar();
+        *argc = 0;
+        return NULL;
+    }
     
     /* shell-like expansion of string in buffer into p */
     if (wordexp(buffer, &p, 0)) /* returns 0 on success */

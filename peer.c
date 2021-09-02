@@ -1693,12 +1693,7 @@ void demux_user_input(ThisPeer *peer)
 
     argv = get_command_line(&argc);
 
-    if (argv == NULL)
-    {
-        /* TODO what to do? */
-        printf("cmd line error?\n");
-        return;
-    }
+    if (argc == 0) return;
     
     for (i = 0; i < NUM_CMDS; i++)
     {
