@@ -207,7 +207,7 @@ void load_register_from_file(EntryList *entries, const char* file_name)
  * @param dest 
  * @param src 
  */
-void merge_entry_lists(EntryList *dest, EntryList *src)
+void merge_entry_lists(EntryList *dest, EntryList *src, bool strict)
 {
     Entry *a, *b; /* pointers to an entry in dest and src respectively */
     Entry *tmp, *tmp_prev;
@@ -250,7 +250,7 @@ void merge_entry_lists(EntryList *dest, EntryList *src)
         if (cmp_res == 0)
         {
             /* merge entries only if the dest entry is LOCAL */
-            if ((a->flags & ENTRY_SCOPE) == SCOPE_LOCAL)
+            if (!strict || (a->flags & ENTRY_SCOPE) == SCOPE_LOCAL)
             {
                 /* update dest entry with src entry data, and delete the src entry */
                 
@@ -629,7 +629,7 @@ int main_test()
     printf("others\n");
     print_entries_asc(&others);
     
-    merge_entry_lists(&entries, &others);
+    merge_entry_lists(&entries, &others, COPY_STRICT);
     
     printf("\nentries\n");
     print_entries_asc(&entries);

@@ -12,6 +12,9 @@
 #define FNAME_REGISTER "register.txt"
 #define TIMESTAMP_STRLEN 11
 
+#define COPY_STRICT true
+#define COPY_SHALLOW false
+
 /*
 Register entry format:
     entry(timestamp flags tamponi nuovi_casi)
@@ -89,7 +92,7 @@ bool is_entry_list_empty(EntryList *list);
 
 void load_register_from_file(EntryList *entries, const char* file_name);
 
-void merge_entry_lists(EntryList *entries, EntryList *new_entries);
+void merge_entry_lists(EntryList *entries, EntryList *new_entries, bool strict);
 
 void add_entry(EntryList *entries, Entry *entry);
 void remove_entry(EntryList *entries, Entry *entry);
