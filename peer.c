@@ -606,9 +606,12 @@ bool ask_aggr_to_neighbors(ThisPeer *peer, EntryList *req_aggr)
     return false;
 }
 
-bool ask_aggr_to_peers(ThisPeer *peer, EntryList *req_entries, in_port_t peers[], int n)
+void ask_aggr_to_peers(
+    ThisPeer *peer, 
+    EntryList *req_entries, EntryList *recvd_entries, 
+    in_port_t peers[], int n)
 {
-    EntryList data_received;
+    EntryList tmp_data_received;/* , total_data_received; */
     socklen_t slen;
     int i;
     Message msg;
@@ -619,6 +622,8 @@ bool ask_aggr_to_peers(ThisPeer *peer, EntryList *req_entries, in_port_t peers[]
     addr.sin_family = AF_INET;
     inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr.s_addr);
 
+    init_entry_list(recvd_entries);
+
     slen = sizeof(struct sockaddr_in);
 
     for (i = 0; i < n; i++)
@@ -627,7 +632,7 @@ bool ask_aggr_to_peers(ThisPeer *peer, EntryList *req_entries, in_port_t peers[]
         if (sd == -1)
         {
             perror("socket error");
-            return false;
+            return;
         }
 
         printf("asking entries to %d (sd: %d)\n", peers[i], sd);
@@ -638,7 +643,7 @@ bool ask_aggr_to_peers(ThisPeer *peer, EntryList *req_entries, in_port_t peers[]
         if (ret == -1)
         {
             perror("connect error");
-            return false;
+            return;
         }
 
         msg.type = MSG_REQ_DATA;
@@ -650,34 +655,37 @@ bool ask_aggr_to_peers(ThisPeer *peer, EntryList *req_entries, in_port_t peers[]
         if (ret == -1)
         {
             printf("could not send MSG_REQ_DATA to peer %d\n", peers[i]);
-            return false;
+            return;
         }
 
         ret = recv_message(sd, &msg);
         if (ret == -1)
         {
             printf("error while receiving MSG_REPLY_DATA\n");
-            return false;
+            return;
         }
 
         close(sd);
 
         /* TODO check message type? */
         
-        init_entry_list(&data_received);
-        deserialize_entries(msg.body, &data_received);
+        init_entry_list(&tmp_data_received);
+        deserialize_entries(msg.body, &tmp_data_received);
 
         printf("received:\n");
-        print_entries_asc(&data_received);
+        print_entries_asc(&tmp_data_received);
 
-        if (!is_entry_list_empty(&data_received))
+        if (!is_entry_list_empty(&tmp_data_received))
         {
-            printf("aggregate found in neighbor %d\n", msg.id);
-            merge_entry_lists(req_entries, &data_received, COPY_SHALLOW);
+            printf("entries found in neighbor %d\n", msg.id);
+            merge_entry_lists(recvd_entries, &tmp_data_received, COPY_SHALLOW);
         }
     }
 
-    return false;
+    printf("all entries received:\n");
+    print_entries_asc(recvd_entries);
+
+    return;
 }
 
 void finalize_get_aggr_tot(ThisPeer *peer, in_port_t peers[], int n)
@@ -687,22 +695,75 @@ void finalize_get_aggr_tot(ThisPeer *peer, in_port_t peers[], int n)
     /* set all new entries as GLOBAL */
     /* the missing entries are added as zero, GLOBAL */
     /* compute the sum */
+
+    EntryList received_entries, found_entries, not_found_entries;
+    Entry *entry;
+    int32_t flags;
+    int count;
+    int period_len;
     
-    printf("asking entries to peers:\n");
+    printf("asking this entries to peers:\n");
     print_entries_asc(peer->req_entries);
 
-    ask_aggr_to_peers(peer, peer->req_entries, peers, n);
+    init_entry_list(&received_entries);
+    ask_aggr_to_peers(peer, peer->req_entries, &received_entries, peers, n);
 
-    printf("REQ_ENTRIES before merge\n");
-    print_entries_asc(peer->req_entries);
+    printf("RECVD_ENTRIES obtained\n");
+    print_entries_asc(&received_entries);
 
-    merge_entry_lists(&peer->entries, peer->req_entries, COPY_SHALLOW);
+    entry = received_entries.first;
+    while (entry)
+    {   
+        entry->flags |= SCOPE_GLOBAL;
+        entry = entry->next;
+    }
 
-    printf("REQ_ENTRIES after merge\n");
-    print_entries_asc(peer->req_entries);
+    printf("RECVD_ENTRIES before merge\n");
+    print_entries_asc(&received_entries);
+
+    merge_entry_lists(&peer->entries, &received_entries, COPY_STRICT);
 
     printf("REGISTER AFTER MERGE\n");
     print_entries_asc(&peer->entries);
+
+    flags = AGGREG_DAILY | SCOPE_LOCAL | TYPE_TOTAL;
+
+    init_entry_list(&found_entries);
+    init_entry_list(&not_found_entries);
+
+    count = search_needed_entries(
+        peer, 
+        &found_entries, &not_found_entries, 
+        peer->beg_period, peer->end_period,
+        flags
+    );
+
+    if (count != 0)
+    {
+        printf("missing entries\n");
+        entry = not_found_entries.first;
+        while (entry)
+        {
+            entry->flags |= SCOPE_GLOBAL;
+            printf("adding:\n");
+            print_entry(entry);
+            add_entry(&peer->entries, entry);
+            entry = entry->next;
+        }
+    }
+
+    period_len = (int)difftime(peer->end_period, peer->beg_period) / 86400 + 1;
+
+    entry = create_entry(
+            peer->beg_period, 0, 0, AGGREG_PERIOD | SCOPE_GLOBAL | TYPE_TOTAL
+        );
+    entry->period_len = period_len;
+    compute_aggr_tot(peer, &found_entries, entry);
+
+    printf("result:\n");
+    print_entry(entry);
+
+    add_entry(&peer->entries, entry);
 }
 
 void finalize_get_aggr_var(ThisPeer *peer, in_port_t peers[], int n)
