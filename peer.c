@@ -114,6 +114,23 @@ in_port_t get_peer_port(Message *msgp, int n)
 #define NUM_LAST_REQUESTS 3
 #define REQUESTER_SELF -1
 
+struct ThisPeer;
+
+typedef struct FloodRequest {
+    int32_t number;
+    EntryList *required_entries, *found_entries;
+    int requester_sd;
+    int nbrs_remaining;
+    Message *response_msg;
+    time_t beg_period, end_period;
+    void (*callback)(struct ThisPeer*, in_port_t[], int);
+} FloodRequest;
+
+void free_flood_request(FloodRequest *req)
+{
+    
+}
+
 typedef struct ThisPeer {
     /* address bound to this peer */
     struct sockaddr_in addr;
@@ -131,13 +148,14 @@ typedef struct ThisPeer {
     /* handling flood requests */
     int last_requests[NUM_LAST_REQUESTS];
     int lr_head, lr_tail;
-    int32_t current_req_num;
+    FloodRequest *curr_req;
+    /*int32_t current_req_num;
     EntryList *req_entries, *found_entries;
     int requester_sd;
     int nbrs_remaining;
     Message *req_resp_msg;
     time_t beg_period, end_period;
-    void (*req_callback)(struct ThisPeer*, in_port_t[], int);
+    void (*req_callback)(struct ThisPeer*, in_port_t[], int); */
 
 } ThisPeer;
 
@@ -161,7 +179,7 @@ void init_peer(ThisPeer *peer, int host_port)
     peer->lr_head = 0;
     peer->lr_tail = NUM_LAST_REQUESTS - 1;
 
-    peer->req_entries = peer->found_entries = NULL;
+    peer->curr_req = NULL;
 
     create_graph(&peer->neighbors);
 }
@@ -465,47 +483,6 @@ int search_needed_entries(ThisPeer *peer, EntryList *found, EntryList *not_found
     return count;
 }
 
-#ifdef random_words_one
-/**
- * Create a list of empty entries, with the specified flags, which dates
- * range from start to end, both included. Return the number of entries
- * created.
- * 
- * @param entries 
- * @param start 
- * @param end 
- * @param flags 
- * @return number of entries created
- */
-int init_entries_for_period(EntryList *entries, time_t start, time_t end, int32_t flags)
-{
-    Entry *entry;
-    time_t t_day;
-    struct tm *tm_day;
-    int count = 0;
-
-    t_day = end;
-    tm_day = localtime(&t_day);
-    
-    /* for each day of the period */
-    while (difftime(t_day, start) >= 0)
-    {
-        /* create empty entry */
-        entry = create_entry(t_day, 0, 0, flags);
-        add_entry(entries, entry);
-
-        /* move back one day */
-        tm_day->tm_mday--;
-        t_day = mktime(tm_day);
-        tm_day = localtime(&t_day);
-
-        count++;
-    }
-
-    return count;
-}
-#endif
-
 void connect_to_neighbors(ThisPeer *peer)
 {
     int sd, ret;
@@ -521,7 +498,8 @@ void connect_to_neighbors(ThisPeer *peer)
         if (sd == -1)
         {
             perror("socket error");
-            peer->req_entries = peer->found_entries = NULL;
+            free_flood_request(peer->curr_req);
+            peer->curr_req = NULL;
             return;
         }
 
@@ -529,7 +507,8 @@ void connect_to_neighbors(ThisPeer *peer)
         if (ret == -1)
         {
             perror("connect error");
-            peer->req_entries = peer->found_entries = NULL;
+            free_flood_request(peer->curr_req);
+            peer->curr_req = NULL;
             return;
         }
 
@@ -701,12 +680,14 @@ void finalize_get_aggr_tot(ThisPeer *peer, in_port_t peers[], int n)
     int32_t flags;
     int count;
     int period_len;
+
+    FloodRequest *request = peer->curr_req;
     
     printf("asking this entries to peers:\n");
-    print_entries_asc(peer->req_entries);
+    print_entries_asc(request->required_entries);
 
     init_entry_list(&received_entries);
-    ask_aggr_to_peers(peer, peer->req_entries, &received_entries, peers, n);
+    ask_aggr_to_peers(peer, request->required_entries, &received_entries, peers, n);
 
     printf("RECVD_ENTRIES obtained\n");
     print_entries_asc(&received_entries);
@@ -734,7 +715,7 @@ void finalize_get_aggr_tot(ThisPeer *peer, in_port_t peers[], int n)
     count = search_needed_entries(
         peer, 
         &found_entries, &not_found_entries, 
-        peer->beg_period, peer->end_period,
+        request->beg_period, request->end_period,
         flags
     );
 
@@ -752,10 +733,10 @@ void finalize_get_aggr_tot(ThisPeer *peer, in_port_t peers[], int n)
         }
     }
 
-    period_len = (int)difftime(peer->end_period, peer->beg_period) / 86400 + 1;
+    period_len = (int)difftime(request->end_period, request->beg_period) / 86400 + 1;
 
     entry = create_entry(
-            peer->beg_period, 0, 0, AGGREG_PERIOD | SCOPE_GLOBAL | TYPE_TOTAL
+            request->beg_period, 0, 0, AGGREG_PERIOD | SCOPE_GLOBAL | TYPE_TOTAL
         );
     entry->period_len = period_len;
     compute_aggr_tot(peer, &found_entries, entry);
@@ -780,6 +761,7 @@ void get_aggr_tot(ThisPeer *peer, time_t beg_period, time_t end_period)
     EntryList found_entries, not_found_entries;
     int count = 0;
     bool data_found;
+    FloodRequest *request;
 
     /* 2021:02:13-2021:02:16 (4 days) (flag: 5) TOTALE GLOBALE t: 320  c: 59 */
 
@@ -881,26 +863,27 @@ void get_aggr_tot(ThisPeer *peer, time_t beg_period, time_t end_period)
 
     connect_to_neighbors(peer);
 
-    peer->req_entries = malloc(sizeof(EntryList));
-    init_entry_list(peer->req_entries);
+    peer->curr_req = request = malloc(sizeof(FloodRequest));
+    request->required_entries = malloc(sizeof(EntryList));
+    init_entry_list(request->required_entries);
 
-    peer->found_entries = malloc(sizeof(EntryList));
-    init_entry_list(peer->found_entries);
+    request->found_entries = malloc(sizeof(EntryList));
+    init_entry_list(request->found_entries);
 
     /* merge_entry_lists(peer->req_entries, &totals_needed); */
-    peer->req_entries->first = not_found_entries.first;
-    peer->req_entries->last = not_found_entries.last;
+    request->required_entries->first = not_found_entries.first;
+    request->required_entries->last = not_found_entries.last;
 
     peer->state = STATE_STARTING_FLOOD;
-    peer->current_req_num = rand();
-    peer->requester_sd = REQUESTER_SELF;
-    peer->nbrs_remaining = 0;
-    peer->beg_period = beg_period;
-    peer->end_period = end_period;
-    peer->req_callback = &finalize_get_aggr_tot;
+    request->number = rand();
+    request->requester_sd = REQUESTER_SELF;
+    request->nbrs_remaining = 0;
+    request->beg_period = beg_period;
+    request->end_period = end_period;
+    request->callback = &finalize_get_aggr_tot;
 
-    peer->req_resp_msg = malloc(sizeof(Message));
-    set_num_of_peers(peer->req_resp_msg, 0);
+    request->response_msg = malloc(sizeof(Message));
+    set_num_of_peers(request->response_msg, 0);
 
     disable_user_input(peer);
     set_timeout(peer, rand() % 4);
@@ -1344,6 +1327,7 @@ void handle_flood_for_entries(ThisPeer *peer, Message *msgp, int sd)
     int ret, nbr_sd;
     GraphNode *nbr;
     socklen_t slen;
+    FloodRequest *request;
 
     printf("handling flood for entries for %d (sd: %d)\n", msgp->id, sd);
     printf("req num: %d\n", msgp->req_num);
@@ -1375,22 +1359,23 @@ void handle_flood_for_entries(ThisPeer *peer, Message *msgp, int sd)
     printf("I've been asked to look for:\n");
 
     /* reading requested entries */
-    peer->req_entries = malloc(sizeof(EntryList));
-    init_entry_list(peer->req_entries);
-    deserialize_entries(msgp->body, peer->req_entries);
+    peer->curr_req = request = malloc(sizeof(FloodRequest));
+    request->required_entries = malloc(sizeof(EntryList));
+    init_entry_list(request->required_entries);
+    deserialize_entries(msgp->body, request->required_entries);
 
-    print_entries_asc(peer->req_entries);
+    print_entries_asc(request->required_entries);
 
     /* TODO it's redauntant */
-    peer->found_entries = malloc(sizeof(EntryList));
-    init_entry_list(peer->found_entries);
+    request->found_entries = malloc(sizeof(EntryList));
+    init_entry_list(request->found_entries);
 
     /* iterating through requested entries and searching them in the 
         register. The ones that are not found, or are found but have
         SCOPE_LOCAL, are put into req_entries to be asked to this
         peer's neighbors. */
 
-    req_entry = peer->req_entries->first;
+    req_entry = request->required_entries->first;
     while (req_entry != NULL) 
     {
         found_entry = search_entry(
@@ -1404,14 +1389,14 @@ void handle_flood_for_entries(ThisPeer *peer, Message *msgp, int sd)
 
         if (found_entry != NULL)
         {
-            add_entry(peer->found_entries, found_entry);
+            add_entry(request->found_entries, found_entry);
 
             /* global entries have the same value for all the peers.
                 The neighbors wont be asked for global entries if this
                 peer already has some of them */
             if ((found_entry->flags & ENTRY_SCOPE) == SCOPE_GLOBAL)
             {
-                remove_entry(peer->req_entries, req_entry);
+                remove_entry(request->required_entries, req_entry);
                 removed_entry = req_entry;
             }
         }
@@ -1421,10 +1406,10 @@ void handle_flood_for_entries(ThisPeer *peer, Message *msgp, int sd)
     }
     
     printf("I've got:\n");
-    print_entries_asc(peer->found_entries);
+    print_entries_asc(request->found_entries);
 
     printf("Flooding for:\n");
-    print_entries_asc(peer->req_entries);
+    print_entries_asc(request->required_entries);
 
     slen = sizeof(struct sockaddr_in);
 
@@ -1440,7 +1425,8 @@ void handle_flood_for_entries(ThisPeer *peer, Message *msgp, int sd)
         if (nbr_sd == -1)
         {
             perror("socket error");
-            peer->req_entries = peer->found_entries = NULL;
+            free_flood_request(request);
+            request = NULL;
             return;
         }
 
@@ -1448,7 +1434,8 @@ void handle_flood_for_entries(ThisPeer *peer, Message *msgp, int sd)
         if (ret == -1)
         {
             perror("connect error");
-            peer->req_entries = peer->found_entries = NULL;
+            free_flood_request(request);
+            request = NULL;
             return;
         }
 
@@ -1466,25 +1453,25 @@ void handle_flood_for_entries(ThisPeer *peer, Message *msgp, int sd)
     set_timeout(peer, rand() % 4);
 
     /* configuring request-handling data */
-    peer->current_req_num = msgp->req_num;
-    peer->requester_sd = sd;
-    peer->nbrs_remaining = 0; /* how many nbrs accepted the connection */
+    request->number = msgp->req_num;
+    request->requester_sd = sd;
+    request->nbrs_remaining = 0; /* how many nbrs accepted the connection */
 
     /* creating aggregated response message */
     /* each nbr response is added to this message's body */
-    peer->req_resp_msg = malloc(sizeof(Message));
-    peer->req_resp_msg->type = MSG_ENTRIES_FOUND;
-    peer->req_resp_msg->req_num = msgp->req_num;
-    peer->req_resp_msg->id = get_peer_id(peer); /* for debugging */
+    request->response_msg = malloc(sizeof(Message));
+    request->response_msg->type = MSG_ENTRIES_FOUND;
+    request->response_msg->req_num = msgp->req_num;
+    request->response_msg->id = get_peer_id(peer); /* for debugging */
     /* TODO set callback */
-    set_num_of_peers(peer->req_resp_msg, 0);
+    set_num_of_peers(request->response_msg, 0);
 
     /* if this peer has some of the requested entries */
-    if (!is_entry_list_empty(peer->found_entries))
+    if (!is_entry_list_empty(request->found_entries))
     {
         /* add this peer to the aggregated response message */
         printf("adding myself in\n");
-        add_peer_to_msg(peer->req_resp_msg, ntohs(peer->addr.sin_port));
+        add_peer_to_msg(request->response_msg, ntohs(peer->addr.sin_port));
     }
     else
     {
@@ -1505,12 +1492,14 @@ void do_flood_for_entries(ThisPeer *peer, int sd)
     Message msg;
     int ret;
 
+    FloodRequest *request = peer->curr_req;
+
     printf("actually sending FLOOD request to sd %d\n", sd);
 
     msg.type = MSG_FLOOD_FOR_ENTRIES;
-    msg.req_num = peer->current_req_num;
+    msg.req_num = request->number;
     msg.id = get_peer_id(peer);
-    msg.body_len = serialize_entries(msg.body, peer->req_entries) - msg.body;
+    msg.body_len = serialize_entries(msg.body, request->required_entries) - msg.body;
 
     ret = send_message(sd, &msg);
     if (ret == -1) 
@@ -1519,7 +1508,7 @@ void do_flood_for_entries(ThisPeer *peer, int sd)
         return;
     }
 
-    printf("sent request to neighbor (%d)\n", peer->nbrs_remaining);
+    printf("sent request to neighbor (%d)\n", request->nbrs_remaining);
 
     /* moving the socket from the write set, to the read set */
     _remove_desc(&peer->master_write_set, &peer->fdmax_w, sd);
@@ -1535,7 +1524,7 @@ void do_flood_for_entries(ThisPeer *peer, int sd)
         clear_timeout(peer);
     }
     
-    peer->nbrs_remaining++;
+    request->nbrs_remaining++;
 }
 
 /**
@@ -1550,15 +1539,17 @@ void handle_flood_response(ThisPeer *peer, Message *msgp, int sd)
     int ret, num_of_peers;
     in_port_t *peers;
 
+    FloodRequest *request = peer->curr_req;
+
     printf("received flood response from %d (sd: %d)\n", msgp->id, sd);
 
 
-    if (peer->requester_sd != REQUESTER_SELF)
+    if (request->requester_sd != REQUESTER_SELF)
     {
         printf("relaying flood response\n");
 
         /* TODO check if really needed */
-        if (peer->req_resp_msg == NULL)
+        if (request->response_msg == NULL)
         {
             printf("flood response already relayed\n");
             return;
@@ -1570,23 +1561,23 @@ void handle_flood_response(ThisPeer *peer, Message *msgp, int sd)
     /* updating the number of peers that satisfy the request in 
         the aggregated response message */
     
-    merge_peer_list_msgs(peer->req_resp_msg, msgp);
+    merge_peer_list_msgs(request->response_msg, msgp);
     
-    printf("new num of peers: %d\n", get_num_of_peers(peer->req_resp_msg));
+    printf("new num of peers: %d\n", get_num_of_peers(request->response_msg));
     
     /* this is the last response message */
-    if (peer->nbrs_remaining == 1)
+    if (request->nbrs_remaining == 1)
     {
-        if (peer->requester_sd != REQUESTER_SELF)
+        if (request->requester_sd != REQUESTER_SELF)
         {
             /* sending back this peer's aggregated response */
 
-            peer->req_resp_msg->type = MSG_ENTRIES_FOUND;
-            peer->req_resp_msg->req_num = peer->current_req_num;
+            request->response_msg->type = MSG_ENTRIES_FOUND;
+            request->response_msg->req_num = request->number;
 
-            printf("last response: sending it to sd %d\n", peer->requester_sd);
+            printf("last response: sending it to sd %d\n", request->requester_sd);
             
-            ret = send_message(peer->requester_sd, peer->req_resp_msg);
+            ret = send_message(request->requester_sd, request->response_msg);
             if (ret == -1)
             {
                 printf("could not send (relay) FLOOD response\n");
@@ -1597,8 +1588,8 @@ void handle_flood_response(ThisPeer *peer, Message *msgp, int sd)
             close(sd);
             _remove_desc(&peer->master_read_set, &peer->fdmax_r, sd);
 
-            free(peer->req_resp_msg);
-            peer->req_resp_msg = NULL;
+            free(request->response_msg);
+            request->response_msg = NULL;
         }
         else
         {   
@@ -1606,9 +1597,9 @@ void handle_flood_response(ThisPeer *peer, Message *msgp, int sd)
             close(sd);
             _remove_desc(&peer->master_read_set, &peer->fdmax_r, sd);
 
-            peers = (in_port_t*)peer->req_resp_msg->body;
+            peers = (in_port_t*)request->response_msg->body;
 
-            num_of_peers = get_num_of_peers(peer->req_resp_msg);
+            num_of_peers = get_num_of_peers(request->response_msg);
 
             printf("%d peers have entries for me:\n", num_of_peers);
 
@@ -1616,22 +1607,22 @@ void handle_flood_response(ThisPeer *peer, Message *msgp, int sd)
             while (num_of_peers >= 0)
                 printf("peer: %d\n", peers[--num_of_peers]);
             
-            if (peer->req_callback != NULL)
+            if (request->callback != NULL)
             {
-                num_of_peers = get_num_of_peers(peer->req_resp_msg);
+                num_of_peers = get_num_of_peers(request->response_msg);
                 printf("finalising the aggr request\n");
                 printf("%d peers responded\n", num_of_peers);
 
                 peers = calloc(num_of_peers, sizeof(in_port_t));
 
                 if (peers != NULL)
-                    memcpy(peers, peer->req_resp_msg->body, num_of_peers * sizeof(in_port_t));
+                    memcpy(peers, request->response_msg->body, num_of_peers * sizeof(in_port_t));
 
                 /* while (num_of_peers >= 0)
                     printf("> peer: %d\n", peers[--num_of_peers]);
                 num_of_peers = get_num_of_peers(peer->req_resp_msg); */
 
-                (*peer->req_callback)(peer, peers, num_of_peers);
+                (*request->callback)(peer, peers, num_of_peers);
                 /* TODO when to free msgp? */
             }
         }
@@ -1643,93 +1634,16 @@ void handle_flood_response(ThisPeer *peer, Message *msgp, int sd)
         _remove_desc(&peer->master_read_set, &peer->fdmax_r, sd);
     }
 
-    #ifdef RITA
-    /* if this peer is NOT the one requesting the flood */
-    if (peer->requester_sd != REQUESTER_SELF)
-    {
-        printf("relaying flood response\n");
-
-        /* TODO check if really needed */
-        if (peer->req_resp_msg == NULL)
-        {
-            printf("flood response already relayed\n");
-            return;
-        }
-
-        num_of_peers = get_num_of_peers(msgp);
-        printf("received num of peers: %d\n", num_of_peers);
-
-        /* updating the number of peers that satisfy the request in 
-            the aggregated response message */
-        
-        merge_peer_list_msgs(peer->req_resp_msg, msgp);
-        
-        printf("new num of peers: %d\n", get_num_of_peers(peer->req_resp_msg));
-
-        /* this is the last response message */
-        if (peer->nbrs_remaining == 1)
-        {
-            /* sending back this peer's aggregated response */
-
-            peer->req_resp_msg->type = MSG_ENTRIES_FOUND;
-            peer->req_resp_msg->req_num = peer->current_req_num;
-
-            printf("last response: sending it to sd %d\n", peer->requester_sd);
-            
-            ret = send_message(peer->requester_sd, peer->req_resp_msg);
-            if (ret == -1)
-            {
-                printf("could not send (relay) FLOOD response\n");
-                return;
-            }
-
-            free(peer->req_resp_msg);
-            peer->req_resp_msg = NULL;
-        }
-    }
-    /* if this peer IS the one requesting the flood */
-    else
-    {
-        peers = (in_port_t*)msgp->body;
-
-        num_of_peers = get_num_of_peers(msgp);
-
-        printf("%d peers have entries for me:\n", num_of_peers);
-
-        /* deserializing received peers addresses */
-        while (num_of_peers >= 0)
-            printf("peer: %d\n", peers[--num_of_peers]);
-        
-        if (peer->req_callback != NULL)
-        {
-            num_of_peers = get_num_of_peers(msgp);
-            printf("finalising the aggr request\n");
-            printf("%d peers responded\n", num_of_peers);
-
-            peers = calloc(num_of_peers, sizeof(in_port_t));
-
-            if (peers != NULL)
-                memcpy(peers, msgp->body, num_of_peers);
-
-            /* close(sd);
-            _remove_desc(&peer->master_read_set, &peer->fdmax_r, sd); */
-
-            (*peer->req_callback)(peer, peers, num_of_peers);
-            /* TODO when to free msgp? */
-        }
-    }
-    #endif
-
     /* TODO check when to close the sockets (in demux? really?) */
     /* close(sd);
     _remove_desc(&peer->master_read_set, &peer->fdmax_r, sd); */
 
-    peer->nbrs_remaining--;
+    request->nbrs_remaining--;
 
-    printf("waiting for %d more responses\n", peer->nbrs_remaining);
+    printf("waiting for %d more responses\n", request->nbrs_remaining);
 
     /* other sockets remain to read */
-    if (peer->nbrs_remaining > 0)
+    if (request->nbrs_remaining > 0)
     {
         set_timeout(peer, rand() % 4);
     }
