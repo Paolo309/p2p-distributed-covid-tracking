@@ -127,12 +127,18 @@ int recv_message_from(int sd, Message *msgp, struct sockaddr_in* from)
     ret = recvfrom(sd, _buffer, BUFSIZE, 0, (struct sockaddr*)from, lenp);
     save_errno = errno;
     
-    if (ret < MSG_HEADER_LEN)
+    if (ret > 0 && ret < MSG_HEADER_LEN)
     {
         if (ret == -1) perror("recvfrom error");
         else printf("recvfrom error: received %d bytes instead of %d (header length)\n", ret, MSG_HEADER_LEN);
         errno = save_errno;
         return -1;
+    }
+
+    if (ret == 0)
+    {
+        printf("recvfrom: connection closed\n");
+        return 0;
     }
     
     deserialize_message(_buffer, msgp);

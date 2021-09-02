@@ -235,6 +235,15 @@ void merge_entry_lists(EntryList *dest, EntryList *src, bool strict)
        the head of one of the two */
     while (a != NULL && b != NULL)
     {
+        /* printf("\n##### CURRENT ENTRIES ######\n");
+        print_entry(a);
+        print_entry(b);
+        printf("\n###### DEBUG SRC LIST ######\n");
+        print_entries_asc(src);
+        printf("\n###### DEBUG DEST LIST ######\n");
+        print_entries_asc(dest);
+        printf("############ END ############\n\n"); */
+
         /* make `a` point to first entry in dest where a->timestamp <= b->timestamp */
         while (a != NULL && (cmp_res = cmp_entries(a, b)) > 0)
             a = a->prev;
@@ -257,7 +266,7 @@ void merge_entry_lists(EntryList *dest, EntryList *src, bool strict)
                 /* adding LOCAL entry values to LOCAL entry values */
                 if ((b->flags & ENTRY_SCOPE) == SCOPE_LOCAL)
                 {
-                    
+                    printf("SUMMING\n");
                     a->tamponi += b->tamponi;
                     a->nuovi_casi += b->nuovi_casi;
                     /* a->flags = b->flags; */
@@ -265,6 +274,7 @@ void merge_entry_lists(EntryList *dest, EntryList *src, bool strict)
                 /* copying GLOBAL entry values into LOCAL entry values */
                 else
                 {
+                    printf("COPYING\n");
                     a->tamponi = b->tamponi;
                     a->nuovi_casi = b->nuovi_casi;
                     a->flags = b->flags;
@@ -272,7 +282,7 @@ void merge_entry_lists(EntryList *dest, EntryList *src, bool strict)
             }
             
             tmp = b->prev;
-            free(b);
+            /* free(b); */
             b = tmp;
             
             a = a->prev;
