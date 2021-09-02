@@ -81,10 +81,10 @@ int cmp_entries(Entry *a, Entry *b)
 {
     int cmp_res;
 
-    /* printf("--- comparing\n");
+    printf("--- comparing\n");
     print_entry(a);
     printf("--- with\n");
-    print_entry(b); */
+    print_entry(b);
     
     cmp_res = a->timestamp - b->timestamp;
     if (cmp_res != 0)
@@ -600,7 +600,11 @@ Entry *search_entry(Entry *from, time_t timestamp, int32_t flags, int32_t period
 
     while (entry)
     {
-        if (cmp_entries(entry, model) == 0) break;
+        if (cmp_entries(entry, model) == 0) 
+        {
+            printf("found\n");
+            break;
+        }
         entry = entry->prev;
     }
 
