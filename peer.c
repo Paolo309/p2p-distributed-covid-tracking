@@ -524,6 +524,47 @@ int search_needed_entries(ThisPeer *peer, EntryList *found, EntryList *not_found
     return count;
 }
 
+int remove_not_needed_totals(EntryList *needed_totals, EntryList *needed_vars)
+{   
+    Entry *entry, *found_entry, *removed_entry; 
+    int count = 0;
+
+    entry = needed_totals->last;
+    while (entry)
+    {
+        found_entry = search_entry(
+            needed_vars->last,
+            entry->timestamp,
+            AGGREG_PERIOD | SCOPE_GLOBAL | TYPE_VARIATION,
+            2
+        );
+
+        if (found_entry == NULL)
+        {
+            found_entry = search_entry(
+                needed_vars->last,
+                entry->timestamp - 86400,
+                entry->flags,
+                2
+            );
+        }
+
+        removed_entry = NULL;
+
+        if (found_entry == NULL)
+        {
+            removed_entry = entry;
+            remove_entry(needed_totals, entry);
+            count++;
+        }
+
+        entry = entry->prev;
+        free(removed_entry);
+    }
+
+    return count;
+}
+
 void connect_to_neighbors(ThisPeer *peer, FloodRequest *request)
 {
     int sd, ret;
@@ -802,6 +843,8 @@ void ask_aggr_to_peers(
     return;
 }
 
+
+
 void finalize_get_aggr_tot(ThisPeer *peer, in_port_t peers[], int n, int req_num)
 {
     EntryList received_entries, found_entries, not_found_entries;
@@ -857,7 +900,7 @@ void finalize_get_aggr_tot(ThisPeer *peer, in_port_t peers[], int n, int req_num
             entry->flags |= SCOPE_GLOBAL;
             printf("adding:\n");
             print_entry(entry);
-            add_entry(&peer->entries, entry);
+            add_entry(&peer->entries, copy_entry(entry));
             entry = entry->next;
         }
     }
@@ -868,7 +911,7 @@ void finalize_get_aggr_tot(ThisPeer *peer, in_port_t peers[], int n, int req_num
             request->beg_period, 0, 0, AGGREG_PERIOD | SCOPE_GLOBAL | TYPE_TOTAL
         );
     entry->period_len = period_len;
-    compute_aggr_tot(peer, &found_entries, entry);
+    compute_aggr_tot(peer, &peer->entries, entry);
 
     printf("result:\n");
     print_entry(entry);
@@ -878,9 +921,82 @@ void finalize_get_aggr_tot(ThisPeer *peer, in_port_t peers[], int n, int req_num
     /* TODO be less verbose */
 }
 
-void finalize_get_aggr_var(ThisPeer *peer, in_port_t peers[], int n)
+void finalize_get_aggr_var(ThisPeer *peer, in_port_t peers[], int n, int req_num)
 {
+    EntryList found_entries, not_found_entries, received_entries, entries_res;
+    int32_t flags;
+    Entry* entry;
+    int count;
 
+    FloodRequest *request = get_request_by_num(peer, req_num);
+
+    /* finalize_get_aggr_tot(peer, peers, n, req_num); */
+
+    printf("asking this entries to peers:\n");
+    print_entries_asc(request->required_entries);
+
+    init_entry_list(&received_entries);
+    ask_aggr_to_peers(peer, request->required_entries, &received_entries, peers, n);
+    
+    printf("RECVD_ENTRIES obtained\n");
+    print_entries_asc(&received_entries);
+
+    entry = received_entries.first;
+    while (entry)
+    {   
+        entry->flags |= SCOPE_GLOBAL;
+        entry = entry->next;
+    }
+
+    printf("RECVD_ENTRIES before merge\n");
+    print_entries_asc(&received_entries);
+
+    merge_entry_lists(&peer->entries, &received_entries, COPY_STRICT);
+
+    printf("REGISTER AFTER MERGE\n");
+    print_entries_asc(&peer->entries);
+
+    flags = AGGREG_DAILY | SCOPE_LOCAL | TYPE_TOTAL;
+    
+    init_entry_list(&found_entries);
+    init_entry_list(&not_found_entries);
+
+    count = search_needed_entries(
+        peer, 
+        &found_entries, &not_found_entries, 
+        request->beg_period, request->end_period, 0, /* period_len = 0 days */
+        flags
+    );
+
+    printf("MISSING ENTRIES:\n");
+    print_entries_asc(&not_found_entries); 
+
+    if (count != 0)
+    {
+        printf("missing entries\n");
+        entry = not_found_entries.first;
+        while (entry)
+        {
+            entry->flags |= SCOPE_GLOBAL;
+            printf("adding:\n");
+            print_entry(entry);
+            add_entry(&peer->entries, copy_entry(entry));
+            entry = entry->next;
+        }
+    }
+
+    flags = AGGREG_PERIOD | SCOPE_GLOBAL | TYPE_VARIATION;
+
+    init_entry_list(&entries_res);
+    compute_aggr_var(peer, &peer->entries, &entries_res, flags);
+
+    printf("final results:\n");
+    print_entries_asc(&entries_res);
+
+    merge_entry_lists(&peer->entries, &entries_res, COPY_STRICT);
+
+    printf("REGISTER AFTER UPDATE:\n");
+    print_entries_asc(&peer->entries);
 }
 
 void get_aggr_tot(ThisPeer *peer, time_t beg_period, time_t end_period)
@@ -1027,47 +1143,6 @@ void get_aggr_tot(ThisPeer *peer, time_t beg_period, time_t end_period)
     set_timeout(peer, rand() % 4);
 }
 
-int remove_not_needed_totals(EntryList *needed_totals, EntryList *needed_vars)
-{   
-    Entry *entry, *found_entry, *removed_entry; 
-    int count = 0;
-
-    entry = needed_totals->last;
-    while (entry)
-    {
-        found_entry = search_entry(
-            needed_vars->last,
-            entry->timestamp,
-            AGGREG_PERIOD | SCOPE_GLOBAL | TYPE_VARIATION,
-            2
-        );
-
-        if (found_entry == NULL)
-        {
-            found_entry = search_entry(
-                needed_vars->last,
-                entry->timestamp - 86400,
-                entry->flags,
-                2
-            );
-        }
-
-        removed_entry = NULL;
-
-        if (found_entry == NULL)
-        {
-            removed_entry = entry;
-            remove_entry(needed_totals, entry);
-            count++;
-        }
-
-        entry = entry->prev;
-        free(removed_entry);
-    }
-
-    return count;
-}
-
 void get_aggr_var(ThisPeer *peer, time_t beg_period, time_t end_period)
 {
     EntryList found_var_entries, found_tot_entries;
@@ -1075,8 +1150,9 @@ void get_aggr_var(ThisPeer *peer, time_t beg_period, time_t end_period)
     EntryList entries_res;
     int count, incl_end_period;
     bool all_data_found;
-    Entry *entry, *found_entry, *removed_entry;
     int32_t flags;
+    int req_num;
+    FloodRequest *request;
 
     /* get var t 2021:02:20-2021:02:25 */
 
@@ -1155,17 +1231,18 @@ void get_aggr_var(ThisPeer *peer, time_t beg_period, time_t end_period)
         &not_found_var_entries
     );
 
+    flags = AGGREG_PERIOD | SCOPE_GLOBAL | TYPE_VARIATION;
+
     if (count == 0)
     {
         printf("found all needed entries\n");
 
-        flags = AGGREG_PERIOD | SCOPE_GLOBAL | TYPE_VARIATION;
+        printf("final results:\n");
+        print_entries_asc(&entries_res);
 
         init_entry_list(&entries_res);
         compute_aggr_var(peer, &found_tot_entries, &entries_res, flags);
-
-        printf("final results:\n");
-        print_entries_asc(&entries_res);
+        merge_entry_lists(&peer->entries, &entries_res, COPY_STRICT);
 
         return;
     }
@@ -1207,15 +1284,46 @@ void get_aggr_var(ThisPeer *peer, time_t beg_period, time_t end_period)
     /* some of the variations that were needed before may now not be
         needed anymore (because retrieved from neighbors), so some
         needed total can be removed from not_found_tot_entries. */
-    count -= remove_not_needed_totals(
+    /* count -= remove_not_needed_totals(
         &not_found_tot_entries,
         &not_found_var_entries
-    );
+    ); */
 
     printf("needed tot entries:\n");
     print_entries_asc(&not_found_tot_entries);
 
     /* flooding */
+
+    req_num = rand();
+    request_serviced(peer, req_num);
+    request = get_request_by_num(peer, req_num);
+    request->number = req_num;
+
+    FD_ZERO(&request->involved_peers);
+    connect_to_neighbors(peer, request);
+
+    request->required_entries = malloc(sizeof(EntryList));
+    init_entry_list(request->required_entries);
+
+    request->found_entries = malloc(sizeof(EntryList));
+    init_entry_list(request->found_entries);
+
+    /* merge_entry_lists(peer->req_entries, &totals_needed); */
+    request->required_entries->first = not_found_tot_entries.first;
+    request->required_entries->last = not_found_tot_entries.last;
+
+    peer->state = STATE_STARTING_FLOOD;
+    request->requester_sd = REQUESTER_SELF;
+    request->nbrs_remaining = 0;
+    request->beg_period = beg_period;
+    request->end_period = end_period;
+    request->callback = &finalize_get_aggr_var;
+
+    request->response_msg = malloc(sizeof(Message));
+    set_num_of_peers(request->response_msg, 0);
+
+    disable_user_input(peer);
+    set_timeout(peer, rand() % 4);
 
     /* 
 2021:02:20 1 10 20
@@ -1231,8 +1339,6 @@ void get_aggr_var(ThisPeer *peer, time_t beg_period, time_t end_period)
 2021:02:23 7 23 -10 2
 2021:02:24 7 29 -12 2
      */
-
-    printf("end\n");
 }
 
 
