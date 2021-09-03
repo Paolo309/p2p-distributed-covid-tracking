@@ -442,7 +442,7 @@ void compute_aggr_tot(ThisPeer *peer, EntryList *entries, Entry *entry_res)
  * 
  * @param peer 
  * @param entries source list
- * @param entries_res retult list
+ * @param entries_res result list
  */
 void compute_aggr_var(ThisPeer *peer, EntryList *entries, EntryList *entries_res, int32_t flags)
 {
@@ -562,6 +562,95 @@ void connect_to_neighbors(ThisPeer *peer, FloodRequest *request)
         
         nbr = nbr->next;
     }
+}
+
+bool ask_aggr_to_neighbors_v2(ThisPeer *peer, EntryList *req_aggr, EntryList *recvd_aggr)
+{
+    EntryList data_received;
+    Entry *entry, *found_entry;
+    socklen_t slen;
+    GraphNode *nbr;
+    Message msg;
+    int ret, sd;
+    
+    slen = sizeof(struct sockaddr_in);
+
+    nbr = peer->neighbors.first;
+    while (nbr)
+    {
+        sd = socket(AF_INET, SOCK_STREAM, 0);
+        if (sd == -1)
+        {
+            perror("socket error");
+            return false;
+        }
+
+        ret = connect(sd, (struct sockaddr *)&nbr->peer->addr, slen);
+        if (ret == -1)
+        {
+            perror("connect error");
+            return false;
+        }
+
+        msg.type = MSG_REQ_DATA;
+        msg.id = get_peer_id(peer);
+        msg.body_len = serialize_entries(msg.body, req_aggr) - msg.body;
+        
+        printf("asking aggr to %d\n", ntohs(nbr->peer->addr.sin_port));
+
+        ret = send_message(sd, &msg);
+        if (ret == -1)
+        {
+            printf("could not send REQ_DATA to peer %d\n", ntohs(nbr->peer->addr.sin_port));
+            return false;
+        }
+
+        ret = recv_message(sd, &msg);
+        if (ret == -1)
+        {
+            printf("error while receiving REPLY_DATA\n");
+            return false;
+        }
+
+        close(sd);
+
+        /* TODO check message type? */
+        
+        init_entry_list(&data_received);
+        deserialize_entries(msg.body, &data_received);
+
+        if (!is_entry_list_empty(&data_received))
+        {
+            printf("aggregate found in neighbor %d\n", msg.id);
+            merge_entry_lists(recvd_aggr, &data_received, COPY_SHALLOW);
+
+            entry = data_received.last;
+            while (entry)
+            {
+                found_entry = search_entry(
+                    req_aggr->last,
+                    entry->timestamp,
+                    entry->flags,
+                    entry->period_len
+                );
+
+                if (found_entry != NULL)
+                {
+                    remove_entry(req_aggr, found_entry);
+                    /* free(found_entry); */ /* TODO needed? */
+                }
+                
+                entry = entry->prev;
+            }
+
+            if (is_entry_list_empty(req_aggr))
+                return true;
+        }
+        
+        nbr = nbr->next;
+    }
+
+    return false;
 }
 
 bool ask_aggr_to_neighbors(ThisPeer *peer, EntryList *req_aggr)
@@ -938,12 +1027,55 @@ void get_aggr_tot(ThisPeer *peer, time_t beg_period, time_t end_period)
     set_timeout(peer, rand() % 4);
 }
 
+int remove_not_needed_totals(EntryList *needed_totals, EntryList *needed_vars)
+{   
+    Entry *entry, *found_entry, *removed_entry; 
+    int count = 0;
+
+    entry = needed_totals->last;
+    while (entry)
+    {
+        found_entry = search_entry(
+            needed_vars->last,
+            entry->timestamp,
+            AGGREG_PERIOD | SCOPE_GLOBAL | TYPE_VARIATION,
+            2
+        );
+
+        if (found_entry == NULL)
+        {
+            found_entry = search_entry(
+                needed_vars->last,
+                entry->timestamp - 86400,
+                entry->flags,
+                2
+            );
+        }
+
+        removed_entry = NULL;
+
+        if (found_entry == NULL)
+        {
+            removed_entry = entry;
+            remove_entry(needed_totals, entry);
+            count++;
+        }
+
+        entry = entry->prev;
+        free(removed_entry);
+    }
+
+    return count;
+}
+
 void get_aggr_var(ThisPeer *peer, time_t beg_period, time_t end_period)
 {
-    EntryList found_entries, not_found_var_entries, not_found_tot_entries;
+    EntryList found_var_entries, found_tot_entries;
+    EntryList not_found_var_entries, not_found_tot_entries;
     EntryList entries_res;
     int count, incl_end_period;
-    Entry *entry;
+    bool all_data_found;
+    Entry *entry, *found_entry, *removed_entry;
     int32_t flags;
 
     /* get var t 2021:02:20-2021:02:25 */
@@ -954,7 +1086,7 @@ void get_aggr_var(ThisPeer *peer, time_t beg_period, time_t end_period)
         TYPE_VARIATION : we're looking for a variation, not a sum */
     flags = AGGREG_PERIOD | SCOPE_GLOBAL | TYPE_VARIATION;
 
-    init_entry_list(&found_entries);
+    init_entry_list(&found_var_entries);
     init_entry_list(&not_found_var_entries);
 
     /* the next search includes the extremities of the periods, so search
@@ -970,22 +1102,22 @@ void get_aggr_var(ThisPeer *peer, time_t beg_period, time_t end_period)
 
     count = search_needed_entries(
         peer,
-        &found_entries, &not_found_var_entries,
+        &found_var_entries, &not_found_var_entries,
         beg_period, incl_end_period, 2, /* period_len = 2 days */
         flags
     );
 
     if (count == 0)
     {
-        printf("variations found in local register\n");
-        print_entries_asc(&found_entries);
+        printf("variations found in local register:\n");
+        print_entries_asc(&found_var_entries);
         return;
     }
 
     printf("not all variations found in local register\n");
 
     printf("found var entries:\n");
-    print_entries_asc(&found_entries);
+    print_entries_asc(&found_var_entries);
 
     printf("NOT found var entries:\n");
     print_entries_asc(&not_found_var_entries);
@@ -997,14 +1129,30 @@ void get_aggr_var(ThisPeer *peer, time_t beg_period, time_t end_period)
     /* TODO why SCOPE_LOCAL? search only returns GLOBALS */
     flags = AGGREG_DAILY | SCOPE_LOCAL | TYPE_TOTAL;
 
-    init_entry_list(&found_entries); /* TODO free properly */
+    init_entry_list(&found_tot_entries); /* TODO free properly */
     init_entry_list(&not_found_tot_entries);
 
     count = search_needed_entries(
         peer, 
-        &found_entries, &not_found_tot_entries, 
+        &found_tot_entries, &not_found_tot_entries, 
         beg_period, end_period, 0, /* period_len = 0 days */
         flags
+    );
+
+    /* not_found_tot_entries now contains all entries of TYPE_TOTAL
+        which are needed to compute each variation in the specified
+        period.
+       some of the variations may be already present in the register
+        (those in found_var_entries), this means that some entry
+        in not_found_tot_entries is not needed.
+       this removes those entries from not_found_tot_entries:
+        for each of the tot entries not present in this peer, 
+        remove the entry if this entry is not present in the list
+        of var entries that are not in this peer (and need to be
+        computed or asked to other peers) */
+    count -= remove_not_needed_totals(
+        &not_found_tot_entries,
+        &not_found_var_entries
     );
 
     if (count == 0)
@@ -1014,19 +1162,75 @@ void get_aggr_var(ThisPeer *peer, time_t beg_period, time_t end_period)
         flags = AGGREG_PERIOD | SCOPE_GLOBAL | TYPE_VARIATION;
 
         init_entry_list(&entries_res);
-        compute_aggr_var(peer, &found_entries, &entries_res, flags);
+        compute_aggr_var(peer, &found_tot_entries, &entries_res, flags);
 
-        printf("final results\n");
+        printf("final results:\n");
         print_entries_asc(&entries_res);
 
         return;
     }
 
     printf("found tot entries:\n");
-    print_entries_asc(&found_entries);
+    print_entries_asc(&found_tot_entries);
 
     printf("NOT found tot entries:\n");
     print_entries_asc(&not_found_tot_entries);
+
+    init_entry_list(&found_var_entries); /* TODO free properly */
+
+    all_data_found = ask_aggr_to_neighbors_v2(peer, &not_found_var_entries, &found_var_entries);
+
+    if (all_data_found)
+    {
+        printf("neighbors have all missing aggr entries:\n");
+
+        print_entries_asc(&found_var_entries);
+
+        /* add the aggr entries found to the local register */
+        merge_entry_lists(&peer->entries, &found_var_entries, COPY_STRICT);
+
+        printf("UPDATED REGISTER:\n");
+        print_entries_asc(&peer->entries);
+
+        return;
+    }
+
+    /* add the aggr entries found to the local register */
+    merge_entry_lists(&peer->entries, &found_var_entries, COPY_STRICT);
+
+    printf("UPDATED REGISTER:\n");
+    print_entries_asc(&peer->entries);
+
+    printf("entries still missing:\n");
+    print_entries_asc(&not_found_var_entries);
+
+    /* some of the variations that were needed before may now not be
+        needed anymore (because retrieved from neighbors), so some
+        needed total can be removed from not_found_tot_entries. */
+    count -= remove_not_needed_totals(
+        &not_found_tot_entries,
+        &not_found_var_entries
+    );
+
+    printf("needed tot entries:\n");
+    print_entries_asc(&not_found_tot_entries);
+
+    /* flooding */
+
+    /* 
+2021:02:20 1 10 20
+2021:02:21 1 12 18
+2021:02:22 1 14 17
+2021:02:23 1 16 15
+2021:02:24 1 18 14
+2021:02:25 1 30 5
+    
+2021:02:20 7 23 -4 2
+2021:02:21 7 20 -6 2
+2021:02:22 7 17 -8 2
+2021:02:23 7 23 -10 2
+2021:02:24 7 29 -12 2
+     */
 
     printf("end\n");
 }
