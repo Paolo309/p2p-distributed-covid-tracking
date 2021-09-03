@@ -413,6 +413,14 @@ VAR:
 
 */
 
+/**
+ * Sum all entries in list entries. Does not check if entries are valid.
+ * Only sums entry that have SCOPE_GLOBAL.
+ * 
+ * @param peer 
+ * @param entries source list
+ * @param entry_res result entry
+ */
 void compute_aggr_tot(ThisPeer *peer, EntryList *entries, Entry *entry_res)
 {
     Entry *entry;
@@ -433,6 +441,38 @@ void compute_aggr_tot(ThisPeer *peer, EntryList *entries, Entry *entry_res)
 /**
  * 
  * @param peer 
+ * @param entries source list
+ * @param entries_res retult list
+ */
+void compute_aggr_var(ThisPeer *peer, EntryList *entries, EntryList *entries_res, int32_t flags)
+{
+    Entry *entry, *tmp;
+
+    if (entries->last == NULL)
+        return;
+
+    entry = entries->last->prev;
+
+    while (entry)
+    {
+        if ((entry->flags       & ENTRY_SCOPE) == SCOPE_GLOBAL &&
+            (entry->next->flags & ENTRY_SCOPE) == SCOPE_GLOBAL)
+        {
+            tmp = copy_entry(entry);
+            tmp->tamponi = entry->next->tamponi - tmp->tamponi;
+            tmp->nuovi_casi = entry->next->nuovi_casi - tmp->nuovi_casi;
+            tmp->flags = flags;
+            tmp->period_len = 2;
+            add_entry(entries_res, tmp);
+            /* TODO free entry? */
+        }
+        entry = entry->prev;
+    }
+}
+
+/**
+ * 
+ * @param peer 
  * @param found 
  * @param not_found 
  * @param start 
@@ -440,7 +480,7 @@ void compute_aggr_tot(ThisPeer *peer, EntryList *entries, Entry *entry_res)
  * @param flags 
  * @return int 
  */
-int search_needed_entries(ThisPeer *peer, EntryList *found, EntryList *not_found, time_t start, time_t end, int32_t flags)
+int search_needed_entries(ThisPeer *peer, EntryList *found, EntryList *not_found, time_t start, time_t end, int32_t period_len, int32_t flags)
 {
     Entry *found_entry;
     Entry *new_entry;
@@ -458,7 +498,7 @@ int search_needed_entries(ThisPeer *peer, EntryList *found, EntryList *not_found
         /* entry = create_entry(t_day, 0, 0, flags); */
         /* add_entry(entries, entry); */
 
-        found_entry = search_entry(peer->entries.last, t_day, flags, 0);
+        found_entry = search_entry(peer->entries.last, t_day, flags, period_len);
 
         if (found_entry != NULL && (found_entry->flags & ENTRY_SCOPE) == SCOPE_GLOBAL)
         {
@@ -470,6 +510,7 @@ int search_needed_entries(ThisPeer *peer, EntryList *found, EntryList *not_found
         else
         {
             new_entry = create_entry(t_day, 0, 0, flags);
+            new_entry->period_len = period_len;
             add_entry(not_found, new_entry);
             count++;
         }
@@ -674,12 +715,6 @@ void ask_aggr_to_peers(
 
 void finalize_get_aggr_tot(ThisPeer *peer, in_port_t peers[], int n, int req_num)
 {
-    /* ask peers for entries */
-    /* for each answer, merge into register */
-    /* set all new entries as GLOBAL */
-    /* the missing entries are added as zero, GLOBAL */
-    /* compute the sum */
-
     EntryList received_entries, found_entries, not_found_entries;
     Entry *entry;
     int32_t flags;
@@ -720,7 +755,7 @@ void finalize_get_aggr_tot(ThisPeer *peer, in_port_t peers[], int n, int req_num
     count = search_needed_entries(
         peer, 
         &found_entries, &not_found_entries, 
-        request->beg_period, request->end_period,
+        request->beg_period, request->end_period, 0,
         flags
     );
 
@@ -750,6 +785,8 @@ void finalize_get_aggr_tot(ThisPeer *peer, in_port_t peers[], int n, int req_num
     print_entry(entry);
 
     add_entry(&peer->entries, entry);
+
+    /* TODO be less verbose */
 }
 
 void finalize_get_aggr_var(ThisPeer *peer, in_port_t peers[], int n)
@@ -800,6 +837,7 @@ void get_aggr_tot(ThisPeer *peer, time_t beg_period, time_t end_period)
     /* flags that the entries used to query peers must have:
         AGGREG_DAILY : because we're looking for daily totals 
         SCOPE_LOCAL  : because search for local entries also also returns globals */
+    /* TODO why SCOPE_LOCAL? search only returns GLOBALS */
     flags = AGGREG_DAILY | SCOPE_LOCAL | TYPE_TOTAL;
     
     init_entry_list(&found_entries);
@@ -808,7 +846,7 @@ void get_aggr_tot(ThisPeer *peer, time_t beg_period, time_t end_period)
     count = search_needed_entries(
         peer, 
         &found_entries, &not_found_entries, 
-        beg_period, end_period, 
+        beg_period, end_period, 0, /* period_len = 0 days */
         flags
     );
 
@@ -898,6 +936,99 @@ void get_aggr_tot(ThisPeer *peer, time_t beg_period, time_t end_period)
 
     disable_user_input(peer);
     set_timeout(peer, rand() % 4);
+}
+
+void get_aggr_var(ThisPeer *peer, time_t beg_period, time_t end_period)
+{
+    EntryList found_entries, not_found_var_entries, not_found_tot_entries;
+    EntryList entries_res;
+    int count, incl_end_period;
+    Entry *entry;
+    int32_t flags;
+
+    /* get var t 2021:02:20-2021:02:25 */
+
+    /* flags that the entry we're looking for must have:
+        AGGREG_PERIOD  : we're looking for an entry that covers a period
+        SCOPE_GLOBAL   : the value of the entry must be common to all peers
+        TYPE_VARIATION : we're looking for a variation, not a sum */
+    flags = AGGREG_PERIOD | SCOPE_GLOBAL | TYPE_VARIATION;
+
+    init_entry_list(&found_entries);
+    init_entry_list(&not_found_var_entries);
+
+    /* the next search includes the extremities of the periods, so search
+        until one the day before end_period */
+    incl_end_period = end_period - 86400;
+
+    /* each aggreg entry representing a variation is saved with timestamp
+        set to the first day, period_len = 2 and flag TYPE_VARIATION
+       e.g. variation between 25/11 and 26/11 is -136:
+        timestamp = 25/11
+        tamponi = -136 
+        period_len = 2 */
+
+    count = search_needed_entries(
+        peer,
+        &found_entries, &not_found_var_entries,
+        beg_period, incl_end_period, 2, /* period_len = 2 days */
+        flags
+    );
+
+    if (count == 0)
+    {
+        printf("variations found in local register\n");
+        print_entries_asc(&found_entries);
+        return;
+    }
+
+    printf("not all variations found in local register\n");
+
+    printf("found var entries:\n");
+    print_entries_asc(&found_entries);
+
+    printf("NOT found var entries:\n");
+    print_entries_asc(&not_found_var_entries);
+
+    /* flags that the entries used to query peers must have:
+        AGGREG_DAILY : because we're looking for daily totals 
+        SCOPE_LOCAL  : because search for local entries also also returns globals 
+        TYPE_TOTAL   : we want daily totals to compute daily variations */
+    /* TODO why SCOPE_LOCAL? search only returns GLOBALS */
+    flags = AGGREG_DAILY | SCOPE_LOCAL | TYPE_TOTAL;
+
+    init_entry_list(&found_entries); /* TODO free properly */
+    init_entry_list(&not_found_tot_entries);
+
+    count = search_needed_entries(
+        peer, 
+        &found_entries, &not_found_tot_entries, 
+        beg_period, end_period, 0, /* period_len = 0 days */
+        flags
+    );
+
+    if (count == 0)
+    {
+        printf("found all needed entries\n");
+
+        flags = AGGREG_PERIOD | SCOPE_GLOBAL | TYPE_VARIATION;
+
+        init_entry_list(&entries_res);
+        compute_aggr_var(peer, &found_entries, &entries_res, flags);
+
+        printf("final results\n");
+        print_entries_asc(&entries_res);
+
+        return;
+    }
+
+    printf("found tot entries:\n");
+    print_entries_asc(&found_entries);
+
+    printf("NOT found tot entries:\n");
+    print_entries_asc(&not_found_tot_entries);
+
+    printf("end\n");
 }
 
 
@@ -1109,7 +1240,7 @@ int cmd_get(ThisPeer *peer, int argc, char **argv)
     if (strcmp(argv[1], AGGREG_SUM) == 0)
         get_aggr_tot(peer, period[0], period[1]);
     else if (strcmp(argv[1], AGGREG_VAR) == 0)
-        return 0;
+        get_aggr_var(peer, period[0], period[1]);
 
     /* period_len = period length in seconds / seconds in a day */
     /* does not account for leap seconds */
@@ -1285,7 +1416,7 @@ void handle_req_data(ThisPeer *peer, Message *msgp, int sd)
     while (req_entry)
     {
         /* TODO correct here!!! */
-        printf("searching\n");
+        /* printf("searching\n"); */
         found_entry = search_entry(
             peer->entries.last, 
             req_entry->timestamp,
@@ -1297,6 +1428,7 @@ void handle_req_data(ThisPeer *peer, Message *msgp, int sd)
 
         if (found_entry != NULL)
         {
+            found_entry = copy_entry(found_entry);
             add_entry(&found_entries, found_entry);
             remove_entry(&req_entries, req_entry);
             removed_entry = req_entry;
@@ -1403,6 +1535,7 @@ void handle_flood_for_entries(ThisPeer *peer, Message *msgp, int sd)
 
         if (found_entry != NULL)
         {
+            found_entry = copy_entry(found_entry);
             add_entry(request->found_entries, found_entry);
 
             /* global entries have the same value for all the peers.

@@ -35,7 +35,7 @@ Flag values:
     DAILY:
         0b000 = 0 = TOTAL      LOCALE
         0b001 = 1 = TOTAL      GLOBALE 
-        0b011 = 3 = VARIATION  GLOBALE
+        0b011 = 3 = VARIATION  GLOBALE ???
     AGGREG:
         0b101 = 5 = TOTAL      GLOBALE
         0b111 = 7 = VARIATION  GLOBALE
@@ -81,6 +81,7 @@ typedef struct EntryList {
 time_t str_to_time(const char *str);
 void time_to_str(char *str, time_t *time);
 Entry *create_entry_empty();
+Entry *copy_entry(Entry *src);
 Entry *create_entry(time_t timestamp, int32_t tamponi, int32_t nuovi_casi, uint8_t flags);
 int cmp_entries(Entry *a, Entry *b);
 

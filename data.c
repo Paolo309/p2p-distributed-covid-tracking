@@ -42,6 +42,21 @@ Entry *create_entry_empty()
 }
 
 /**
+ * Create a new entry as copy of src. Pointer to next and preceding
+ * entries are set to NULL.
+ * 
+ * @param src entry to be copied
+ * @return newly allocated entry
+ */
+Entry *copy_entry(Entry *src)
+{
+    Entry *tmp = malloc(sizeof(Entry));
+    memcpy(tmp, src, sizeof(Entry));
+    tmp->next = tmp->prev = NULL;
+    return tmp;
+}
+
+/**
  * Create a new entry.
  * 
  * @param timestamp 
@@ -81,10 +96,10 @@ int cmp_entries(Entry *a, Entry *b)
 {
     int cmp_res;
 
-    printf("--- comparing\n");
+    /* printf("--- comparing\n");
     print_entry(a);
     printf("--- with\n");
-    print_entry(b);
+    print_entry(b); */
     
     cmp_res = a->timestamp - b->timestamp;
     if (cmp_res != 0)
@@ -600,11 +615,7 @@ Entry *search_entry(Entry *from, time_t timestamp, int32_t flags, int32_t period
 
     while (entry)
     {
-        if (cmp_entries(entry, model) == 0) 
-        {
-            printf("found\n");
-            break;
-        }
+        if (cmp_entries(entry, model) == 0) break;
         entry = entry->prev;
     }
 
