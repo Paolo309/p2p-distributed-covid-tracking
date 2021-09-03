@@ -1410,8 +1410,8 @@ int cmd_start(ThisPeer *peer, int argc, char **argv)
     return send_start_msg_to_dserver(peer);
 }
 
-#define TYPE_TAMPONI "t"
-#define TYPE_NCASI "c"
+#define ARG_TYPE_TAMPONI "t"
+#define ARG_TYPE_NCASI "c"
 
 int cmd_add(ThisPeer *peer, int argc, char **argv)
 {
@@ -1429,11 +1429,11 @@ int cmd_add(ThisPeer *peer, int argc, char **argv)
 
     tmp_tamponi = tmp_ncasi = 0;
 
-    if (strcmp(argv[1], TYPE_TAMPONI) == 0)
+    if (strcmp(argv[1], ARG_TYPE_TAMPONI) == 0)
     {
         tmp_tamponi = atoi(argv[2]);
     }
-    else if (strcmp(argv[1], TYPE_NCASI) == 0)
+    else if (strcmp(argv[1], ARG_TYPE_NCASI) == 0)
     {
         tmp_ncasi = atoi(argv[2]);
     }
@@ -1473,34 +1473,93 @@ int cmd_add(ThisPeer *peer, int argc, char **argv)
     return -1;
 }
 
-#define AGGREG_SUM "sum"
-#define AGGREG_VAR "var"
+#define ARG_AGGREG_SUM "sum"
+#define ARG_AGGREG_VAR "var"
 
 int cmd_get(ThisPeer *peer, int argc, char **argv)
 {
     char *token, *str;
+    char str_time[TIMESTAMP_STRLEN];
     int count;
     time_t period[2];
-    /* int32_t period_len; */
     int32_t flags;
-    /* bool tamponi; */
-    /* Entry *entry; */
+    bool somma, tamponi;
 
-    if (argc != 4)
+    if (argc < 3 || argc > 4)
     {
         printf("usage: %s <aggr> <type> <period>\n", argv[0]);
         return -1;
     }
 
-    /* while (--argc >= 0)
-    {
-        printf("arg[%d] = \"%s\"\n", argc, argv[argc]);
-    } */
+    period[0] = period[1] = 0;
 
-    if (strcmp(argv[1], AGGREG_SUM) == 0)
+    /* if period is specified */
+    if (argc == 4)
+    {
+        /* iterate through strings divided by "-" to read the period */
+        count = 0;
+        for (str = argv[3]; ; str = NULL)
+        {
+            token = strtok(str, "-");
+            if (token == NULL)
+                break;
+
+            if (count < 2)
+            {
+                if (strcmp(token, "*") == 0)
+                {
+                    period[count] = 0;
+                }
+                else
+                {
+                    period[count] = str_to_time(token);
+                    if (period[count] == -1)
+                    {
+                        printf("invalid date format: \"%s\"\n", token);
+                        return -1;
+                    }
+                }
+            }
+
+            count++;
+        }
+
+        /* more or less than two arguments in period */
+        if (count != 2)
+        {
+            printf("invalid period format\n");
+            return -1;
+        }
+
+        /* both dates are asterisks */
+        if (period[1] == 0 && period[0] == 0)
+        {
+            printf("invalid period format\n");
+            return -1;   
+        }
+    }
+
+    /* repalcing end period to yesterday if it was set to "*" */
+    if (period[1] == 0) 
+        period[1] = time(NULL) - 86400;
+    
+    if (period[1] < period[0])
+    {
+        printf("invalid period\n");
+        return -1;
+    }
+
+
+    if (strcmp(argv[1], ARG_AGGREG_SUM) == 0)
+    {
         flags = TYPE_TOTAL;
-    else if (strcmp(argv[1], AGGREG_VAR) == 0)
+        somma = true;
+    }
+    else if (strcmp(argv[1], ARG_AGGREG_VAR) == 0)
+    {
         flags = TYPE_VARIATION;
+        somma = false;
+    }
     else
     {
         printf("invalid aggr \"%s\"\n", argv[1]);
@@ -1508,104 +1567,41 @@ int cmd_get(ThisPeer *peer, int argc, char **argv)
     }
     flags |= AGGREG_PERIOD | SCOPE_GLOBAL;
 
-    /* if (strcmp(argv[2], TYPE_TAMPONI))
+    if (strcmp(argv[2], ARG_TYPE_TAMPONI) == 0)
         tamponi = true;
-    else if (strcmp(argv[2], TYPE_NCASI))
+    else if (strcmp(argv[2], ARG_TYPE_NCASI) == 0)
         tamponi = false;
     else
     {
         printf("invalid type \"%s\"\n", argv[2]);
         return -1;
-    } */
-
-    /* iterate through strings divided by "-" to read the period */
-    count = 0;
-    for (str = argv[3]; ; str = NULL)
-    {
-        token = strtok(str, "-");
-        if (token == NULL)
-            break;
-        
-        /* printf("tok \"%s\"", token); */ /* BUGGY */
-        
-        if (count >= 2)
-            continue;
-
-        period[count] = str_to_time(token);
-        if (period[count] == -1)
-        {
-            printf("invalid date format: \"%s\"\n", token);
-            return -1;
-        }
-        count++;
     }
 
-    /* the dates specified in the period are more or less than two */
-    if (count != 2)
-    {
-        printf("invalid period format (count = %d)\n", count);
-        return -1;
-    }
+    
+    printf("\n---\n");
+    printf("CALCOLO ");
+    if (somma)  printf("TOTALE ");
+    else         printf("VARIAZIONI ");
+    if (tamponi) printf("TAMPONI ");
+    else         printf("NUOVI CASI ");
 
-    if (strcmp(argv[1], AGGREG_SUM) == 0)
+    if (period[0] == 0)
+        printf("FRA INIZIO REGISTER ");
+    else
+    {
+        time_to_str(str_time, &period[0]);
+        printf("FRA %s ", str_time);
+    }
+    time_to_str(str_time, &period[1]);
+    printf("E %s", str_time);
+    printf("\n---\n");
+
+    /* the aggregation is done "asynchronously" */
+
+    if (somma)
         get_aggr_tot(peer, period[0], period[1]);
-    else if (strcmp(argv[1], AGGREG_VAR) == 0)
+    else
         get_aggr_var(peer, period[0], period[1]);
-
-    /* period_len = period length in seconds / seconds in a day */
-    /* does not account for leap seconds */
-    /* period_len = 
-        (int)difftime(period[1], period[0]) / 86400 + 1;
-
-    entry = search_entry(peer->entries.last, period[0], flags, period_len);
-
-    if (entry != NULL)
-    {
-        printf("entry found\n");
-        print_entry(entry);
-        return 0;
-    }
-    
-    printf("entry not found in local register\n"); */
-
-
-    
-
-
-    /* TODO when comparing entries, check period_len only if both(?) are
-    of type AGGREG_PERIOD */
-
-    /* search required entries:
-        time = end period
-        found = empty entry list
-        not_found = empty entry list
-
-        flags = SCOPE_GLOBAL
-        if looking for variation:
-            flags |= TYPE_VARIATION
-        else:
-            flags |= TYPE_TOTAL
-
-        while time >= start period:
-            entry = search entry (time, flags, 0)
-
-            if entry == NULL:
-                not_found.push create entry with values zero
-            else
-                found.push entry
-
-            time -= 1 day
-
-        if not_found.empty:
-            print all entries
-            return
-        
-        ask entries to peers
-
-        for each past entry from end to start period:
-            - must be daily
-            - must be 
-     */
 
     return 0;
 }
