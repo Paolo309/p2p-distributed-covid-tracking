@@ -283,7 +283,6 @@ void merge_entry_lists(EntryList *dest, EntryList *src, bool strict)
                 /* adding LOCAL entry values to LOCAL entry values */
                 if ((b->flags & ENTRY_SCOPE) == SCOPE_LOCAL)
                 {
-                    printf("SUMMING\n");
                     a->tamponi += b->tamponi;
                     a->nuovi_casi += b->nuovi_casi;
                     /* a->flags = b->flags; */
@@ -291,7 +290,6 @@ void merge_entry_lists(EntryList *dest, EntryList *src, bool strict)
                 /* copying GLOBAL entry values into LOCAL entry values */
                 else
                 {
-                    printf("COPYING\n");
                     a->tamponi = b->tamponi;
                     a->nuovi_casi = b->nuovi_casi;
                     a->flags = b->flags;
