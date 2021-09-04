@@ -27,6 +27,8 @@ void time_to_str(char *str, time_t *time)
 {
     struct tm *timeinfo;
     timeinfo = localtime(time);
+    if (timeinfo->tm_hour || timeinfo->tm_min || timeinfo->tm_sec)
+        printf("{ERR}");
     strftime(str, TIMESTAMP_STRLEN, "%Y:%m:%d", timeinfo);
 }
 
@@ -97,9 +99,9 @@ int cmp_entries(Entry *a, Entry *b)
     int cmp_res;
 
     /* printf("--- comparing\n");
-    print_entry(a);
+    printf("%ld %d %d\n", a->timestamp, a->flags, a->period_len);
     printf("--- with\n");
-    print_entry(b); */
+    printf("%ld %d %d\n", b->timestamp, b->flags, b->period_len); */
     
     cmp_res = a->timestamp - b->timestamp;
     if (cmp_res != 0)
@@ -461,6 +463,8 @@ void print_entry(Entry *entry)
 {
     time_t tmp_end_period;
     char str_time[TIMESTAMP_STRLEN];
+
+    /* printf("<%ld> ", entry->timestamp); */
 
     if (entry->flags & ENTRY_AGGREG)
     {

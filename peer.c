@@ -11,8 +11,9 @@
 #include "graph.h"
 
 /* comment out the next two defines to user the real date */
-#define FAKE_DAY 10
+#define FAKE_DAY 28
 #define FAKE_MONTH 2
+#define FAKE_YEAR 2021
 
 #define REG_CLOSING_HOUR 23
 
@@ -851,206 +852,7 @@ void ask_aggr_to_peers(
 
 
 
-void finalize_get_aggr_tot(ThisPeer *peer, in_port_t peers[], int n, int req_num)
-{
-    EntryList received_entries, found_entries, not_found_entries;
-    Entry *entry;
-    int32_t flags;
-    int count;
-    int period_len;
-
-    FloodRequest *request = get_request_by_num(peer, req_num);
-    
-    printf("asking this entries to peers:\n");
-    print_entries_asc(request->required_entries);
-
-    init_entry_list(&received_entries);
-    ask_aggr_to_peers(peer, request->required_entries, &received_entries, peers, n);
-
-    printf("RECVD_ENTRIES obtained\n");
-    print_entries_asc(&received_entries);
-
-    entry = received_entries.first;
-    while (entry)
-    {   
-        entry->flags |= SCOPE_GLOBAL;
-        entry = entry->next;
-    }
-
-    printf("RECVD_ENTRIES before merge\n");
-    print_entries_asc(&received_entries);
-
-    merge_entry_lists(&peer->entries, &received_entries, COPY_STRICT);
-
-    printf("REGISTER AFTER MERGE\n");
-    print_entries_asc(&peer->entries);
-
-    flags = AGGREG_DAILY | SCOPE_LOCAL | TYPE_TOTAL;
-
-    init_entry_list(&found_entries);
-    init_entry_list(&not_found_entries);
-
-    count = search_needed_entries(
-        peer, 
-        &found_entries, &not_found_entries, 
-        request->beg_period, request->end_period, 0,
-        flags
-    );
-
-    if (count != 0)
-    {
-        printf("missing entries\n");
-        entry = not_found_entries.first;
-        while (entry)
-        {
-            entry->flags |= SCOPE_GLOBAL;
-            printf("adding:\n");
-            print_entry(entry);
-            add_entry(&peer->entries, copy_entry(entry));
-            entry = entry->next;
-        }
-    }
-
-    period_len = (int)difftime(request->end_period, request->beg_period) / 86400 + 1;
-
-    entry = create_entry(
-            request->beg_period, 0, 0, AGGREG_PERIOD | SCOPE_GLOBAL | TYPE_TOTAL
-        );
-    entry->period_len = period_len;
-    compute_aggr_tot(peer, &found_entries, entry);
-
-    printf("RESULT ");
-    if (request->type == REQ_TAMPONI)
-    {
-        printf("tamponi = %d\n", entry->tamponi);
-    }
-    else
-    {
-        printf("nuovi casi = %d\n", entry->nuovi_casi);
-    }
-
-    add_entry(&peer->entries, entry);
-
-    /* TODO be less verbose */
-}
-
-void finalize_get_aggr_var(ThisPeer *peer, in_port_t peers[], int n, int req_num)
-{
-    EntryList found_tot_entries, not_found_tot_entries;
-    EntryList found_var_entries, not_found_var_entries;
-    EntryList received_entries, entries_res;
-    int32_t flags;
-    Entry* entry;
-    int count;
-    time_t tmp_time;
-    char str_time[TIMESTAMP_STRLEN];
-
-    FloodRequest *request = get_request_by_num(peer, req_num);
-
-    /* finalize_get_aggr_tot(peer, peers, n, req_num); */
-
-    printf("asking this entries to peers:\n");
-    print_entries_asc(request->required_entries);
-
-    init_entry_list(&received_entries);
-    ask_aggr_to_peers(peer, request->required_entries, &received_entries, peers, n);
-    
-    printf("RECVD_ENTRIES obtained\n");
-    print_entries_asc(&received_entries);
-
-    entry = received_entries.first;
-    while (entry)
-    {   
-        entry->flags |= SCOPE_GLOBAL;
-        entry = entry->next;
-    }
-
-    printf("RECVD_ENTRIES before merge\n");
-    print_entries_asc(&received_entries);
-
-    merge_entry_lists(&peer->entries, &received_entries, COPY_STRICT);
-
-    printf("REGISTER AFTER MERGE\n");
-    print_entries_asc(&peer->entries);
-
-    flags = AGGREG_PERIOD | SCOPE_GLOBAL | TYPE_VARIATION;
-
-    init_entry_list(&found_var_entries);
-    init_entry_list(&not_found_var_entries);
-
-    count = search_needed_entries(
-        peer, 
-        &found_var_entries, &not_found_var_entries, 
-        request->beg_period, request->end_period, 2, /* period_len = 0 days */
-        flags
-    );
-
-    flags = AGGREG_DAILY | SCOPE_LOCAL | TYPE_TOTAL;
-    
-    init_entry_list(&found_tot_entries);
-    init_entry_list(&not_found_tot_entries);
-
-    count = search_needed_entries(
-        peer, 
-        &found_tot_entries, &not_found_tot_entries, 
-        request->beg_period, request->end_period, 0, /* period_len = 0 days */
-        flags
-    );
-
-    count -= remove_not_needed_totals(
-        &not_found_tot_entries,
-        &not_found_var_entries
-    );
-
-    printf("MISSING ENTRIES:\n");
-    print_entries_asc(&not_found_tot_entries); 
-
-    if (count != 0)
-    {
-        printf("missing entries\n");
-        entry = not_found_tot_entries.first;
-        while (entry)
-        {
-            entry->flags |= SCOPE_GLOBAL;
-            printf("adding:\n");
-            print_entry(entry);
-            add_entry(&peer->entries, copy_entry(entry));
-            entry = entry->next;
-        }
-    }
-
-    flags = AGGREG_PERIOD | SCOPE_GLOBAL | TYPE_VARIATION;
-
-    init_entry_list(&entries_res);
-
-    /* TODO non va bene! Alcune variazioni sono gia` presenti, altre 
-    vanno calcolate*/
-    compute_aggr_var(peer, &peer->entries, &entries_res, flags);
-
-    printf("RESULTS variazione giornaliera di ");
-    if (request->type == REQ_TAMPONI)
-        printf("tamponi:\n");
-    else
-        printf("nuovi casi:\n");
-    
-    entry = entries_res.first;
-    while (entry)
-    {
-        tmp_time = entry->timestamp + 86400;
-        time_to_str(str_time, &tmp_time);
-        printf("%s ", str_time);
-        if (request->type == REQ_TAMPONI)
-            printf("%d\n", entry->tamponi);
-        else
-            printf("%d\n", entry->nuovi_casi);
-        entry = entry->next;
-    }
-
-    merge_entry_lists(&peer->entries, &entries_res, COPY_STRICT);
-
-    printf("REGISTER AFTER UPDATE:\n");
-    print_entries_asc(&peer->entries);
-}
+void finalize_get_aggr_tot(ThisPeer *peer, in_port_t peers[], int n, int req_num);
 
 void get_aggr_tot(ThisPeer *peer, time_t beg_period, time_t end_period, int type)
 {
@@ -1101,6 +903,8 @@ void get_aggr_tot(ThisPeer *peer, time_t beg_period, time_t end_period, int type
     init_entry_list(&found_entries);
     init_entry_list(&not_found_entries);
 
+    printf("END_PERIOD: %ld\n", end_period);
+
     count = search_needed_entries(
         peer, 
         &found_entries, &not_found_entries, 
@@ -1115,6 +919,7 @@ void get_aggr_tot(ThisPeer *peer, time_t beg_period, time_t end_period, int type
     if (count == 0)
     {
         printf("found all needed entries\n");
+        print_entries_asc(&found_entries);
 
         /* entry which will contain the result of the aggregation */
         entry_res = create_entry(
@@ -1125,7 +930,12 @@ void get_aggr_tot(ThisPeer *peer, time_t beg_period, time_t end_period, int type
         compute_aggr_tot(peer, &found_entries, entry_res);
 
         printf("result computed\n");
-        print_entry(entry_res);
+
+        printf("RESULT ");
+        if (type == REQ_TAMPONI)
+            printf("tamponi = %d\n", entry_res->tamponi);
+        else
+            printf("nuovi casi = %d\n", entry_res->nuovi_casi);
 
         add_entry(&peer->entries, entry_res);
 
@@ -1196,6 +1006,8 @@ void get_aggr_tot(ThisPeer *peer, time_t beg_period, time_t end_period, int type
     disable_user_input(peer);
     set_timeout(peer, rand() % 4);
 }
+
+void finalize_get_aggr_var(ThisPeer *peer, in_port_t peers[], int n, int req_num);
 
 void get_aggr_var(ThisPeer *peer, time_t beg_period, time_t end_period, int type)
 {
@@ -1269,7 +1081,7 @@ void get_aggr_var(ThisPeer *peer, time_t beg_period, time_t end_period, int type
         flags
     );
 
-    printf("ann not found entries before subtraction:\n");
+    printf("all not found entries before subtraction:\n");
     print_entries_asc(&not_found_tot_entries);
 
     /* not_found_tot_entries now contains all entries of TYPE_TOTAL
@@ -1294,11 +1106,19 @@ void get_aggr_var(ThisPeer *peer, time_t beg_period, time_t end_period, int type
     {
         printf("found all needed entries\n");
 
-        printf("final results:\n");
-        print_entries_asc(&entries_res);
-
         init_entry_list(&entries_res);
         compute_aggr_var(peer, &found_tot_entries, &entries_res, flags);
+
+        printf("RESULTS variazione giornaliera di ");
+        if (type == REQ_TAMPONI)
+            printf("tamponi:\n");
+        else
+            printf("nuovi casi:\n");
+
+        merge_entry_lists(&entries_res, &found_var_entries, COPY_STRICT);
+
+        print_entries_asc(&entries_res);
+
         merge_entry_lists(&peer->entries, &entries_res, COPY_STRICT);
 
         return;
@@ -1397,6 +1217,215 @@ void get_aggr_var(ThisPeer *peer, time_t beg_period, time_t end_period, int type
 2021:02:23 7 23 -10 2
 2021:02:24 7 29 -12 2
      */
+}
+
+void finalize_get_aggr_tot(ThisPeer *peer, in_port_t peers[], int n, int req_num)
+{
+    EntryList received_entries, found_entries, not_found_entries;
+    Entry *entry;
+    int32_t flags;
+    int count;
+    int period_len;
+
+    FloodRequest *request = get_request_by_num(peer, req_num);
+    
+    printf("asking this entries to peers:\n");
+    print_entries_asc(request->required_entries);
+
+    init_entry_list(&received_entries);
+    ask_aggr_to_peers(peer, request->required_entries, &received_entries, peers, n);
+
+    printf("RECVD_ENTRIES obtained\n");
+    print_entries_asc(&received_entries);
+
+    entry = received_entries.first;
+    while (entry)
+    {   
+        entry->flags |= SCOPE_GLOBAL;
+        entry = entry->next;
+    }
+
+    printf("RECVD_ENTRIES before merge\n");
+    print_entries_asc(&received_entries);
+
+    merge_entry_lists(&peer->entries, &received_entries, COPY_STRICT);
+
+    printf("REGISTER AFTER MERGE\n");
+    print_entries_asc(&peer->entries);
+
+    flags = AGGREG_DAILY | SCOPE_LOCAL | TYPE_TOTAL;
+
+    init_entry_list(&found_entries);
+    init_entry_list(&not_found_entries);
+
+    count = search_needed_entries(
+        peer, 
+        &found_entries, &not_found_entries, 
+        request->beg_period, request->end_period, 0,
+        flags
+    );
+
+    if (count != 0)
+    {
+        printf("missing entries\n");
+        entry = not_found_entries.first;
+        while (entry)
+        {
+            entry->flags |= SCOPE_GLOBAL;
+            printf("adding:\n");
+            print_entry(entry);
+            add_entry(&peer->entries, copy_entry(entry));
+            entry = entry->next;
+        }
+    }
+
+    get_aggr_tot(peer, request->beg_period, request->end_period, request->type);
+    return;
+
+    period_len = (int)difftime(request->end_period, request->beg_period) / 86400 + 1;
+
+    entry = create_entry(
+            request->beg_period, 0, 0, AGGREG_PERIOD | SCOPE_GLOBAL | TYPE_TOTAL
+        );
+    entry->period_len = period_len;
+    compute_aggr_tot(peer, &found_entries, entry);
+
+    printf("RESULT ");
+    if (request->type == REQ_TAMPONI)
+    {
+        printf("tamponi = %d\n", entry->tamponi);
+    }
+    else
+    {
+        printf("nuovi casi = %d\n", entry->nuovi_casi);
+    }
+
+    add_entry(&peer->entries, entry);
+
+    /* TODO be less verbose */
+}
+
+void finalize_get_aggr_var(ThisPeer *peer, in_port_t peers[], int n, int req_num)
+{
+    EntryList found_tot_entries, not_found_tot_entries;
+    EntryList found_var_entries, not_found_var_entries;
+    EntryList received_entries, entries_res;
+    int32_t flags;
+    Entry* entry;
+    int count;
+    time_t tmp_time;
+    char str_time[TIMESTAMP_STRLEN];
+
+    FloodRequest *request = get_request_by_num(peer, req_num);
+
+    printf("asking this entries to peers:\n");
+    print_entries_asc(request->required_entries);
+
+    init_entry_list(&received_entries);
+    ask_aggr_to_peers(peer, request->required_entries, &received_entries, peers, n);
+    
+    printf("RECVD_ENTRIES obtained\n");
+    print_entries_asc(&received_entries);
+
+    entry = received_entries.first;
+    while (entry)
+    {   
+        entry->flags |= SCOPE_GLOBAL;
+        entry = entry->next;
+    }
+
+    printf("RECVD_ENTRIES before merge\n");
+    print_entries_asc(&received_entries);
+
+    merge_entry_lists(&peer->entries, &received_entries, COPY_STRICT);
+
+    printf("REGISTER AFTER MERGE\n");
+    print_entries_asc(&peer->entries);
+
+    flags = AGGREG_PERIOD | SCOPE_GLOBAL | TYPE_VARIATION;
+
+    init_entry_list(&found_var_entries);
+    init_entry_list(&not_found_var_entries);
+
+    count = search_needed_entries(
+        peer, 
+        &found_var_entries, &not_found_var_entries, 
+        request->beg_period, request->end_period, 2, /* period_len = 0 days */
+        flags
+    );
+
+    flags = AGGREG_DAILY | SCOPE_LOCAL | TYPE_TOTAL;
+    
+    init_entry_list(&found_tot_entries);
+    init_entry_list(&not_found_tot_entries);
+
+    count = search_needed_entries(
+        peer, 
+        &found_tot_entries, &not_found_tot_entries, 
+        request->beg_period, request->end_period, 0, /* period_len = 0 days */
+        flags
+    );
+
+    count -= remove_not_needed_totals(
+        &not_found_tot_entries,
+        &not_found_var_entries
+    );
+
+    printf("MISSING ENTRIES:\n");
+    print_entries_asc(&not_found_tot_entries); 
+
+    if (count != 0)
+    {
+        printf("missing entries\n");
+        entry = not_found_tot_entries.first;
+        while (entry)
+        {
+            entry->flags |= SCOPE_GLOBAL;
+            printf("adding:\n");
+            print_entry(entry);
+            add_entry(&peer->entries, copy_entry(entry));
+            entry = entry->next;
+        }
+    }
+
+    printf("REGISTER:\n");
+    print_entries_asc(&peer->entries);
+
+    printf("FINALIZING\n");
+    get_aggr_var(peer, request->beg_period, request->end_period, request->type);
+    return;
+
+    flags = AGGREG_PERIOD | SCOPE_GLOBAL | TYPE_VARIATION;
+
+    init_entry_list(&entries_res);
+
+    /* TODO non va bene! Alcune variazioni sono gia` presenti, altre 
+    vanno calcolate*/
+    compute_aggr_var(peer, &peer->entries, &entries_res, flags);
+
+    printf("RESULTS variazione giornaliera di ");
+    if (request->type == REQ_TAMPONI)
+        printf("tamponi:\n");
+    else
+        printf("nuovi casi:\n");
+    
+    entry = entries_res.first;
+    while (entry)
+    {
+        tmp_time = entry->timestamp + 86400;
+        time_to_str(str_time, &tmp_time);
+        printf("%s ", str_time);
+        if (request->type == REQ_TAMPONI)
+            printf("%d\n", entry->tamponi);
+        else
+            printf("%d\n", entry->nuovi_casi);
+        entry = entry->next;
+    }
+
+    merge_entry_lists(&peer->entries, &entries_res, COPY_STRICT);
+
+    printf("REGISTER AFTER UPDATE:\n");
+    print_entries_asc(&peer->entries);
 }
 
 
@@ -1508,15 +1537,20 @@ int cmd_add(ThisPeer *peer, int argc, char **argv)
     if (timeinfo->tm_hour >= REG_CLOSING_HOUR)
         timeinfo->tm_mday++;
 
-    timeinfo->tm_hour = timeinfo->tm_min = timeinfo->tm_sec = 0;
-
     #ifdef FAKE_DAY
     timeinfo->tm_mday = FAKE_DAY;
     #endif
 
     #ifdef FAKE_MONTH
-    timeinfo->tm_mon = FAKE_MONTH;
+    timeinfo->tm_mon = FAKE_MONTH - 1;
     #endif
+
+    #ifdef FAKE_YEAR
+    timeinfo->tm_year = FAKE_YEAR - 1900;
+    #endif
+
+    timeinfo->tm_hour = timeinfo->tm_min = timeinfo->tm_sec = 0;
+    timeinfo->tm_isdst = 0;
 
     /* TODO ugly: can directly pass time_t to create_entry */
     /* strftime(str_time, TIMESTAMP_STRLEN, "%Y-%m-%d", timeinfo); */
@@ -1541,7 +1575,7 @@ int cmd_get(ThisPeer *peer, int argc, char **argv)
     int count;
     time_t period[2];
     int32_t flags;
-    /* bool somma, tamponi; */
+    struct tm *timeinfo;
     int aggr, type;
 
     if (argc < 3 || argc > 4)
@@ -1599,8 +1633,28 @@ int cmd_get(ThisPeer *peer, int argc, char **argv)
     }
 
     /* repalcing end period to yesterday if it was set to "*" */
-    if (period[1] == 0) 
-        period[1] = time(NULL) - 86400;
+    if (period[1] == 0)
+    {
+        period[1] = time(NULL);
+        timeinfo = localtime(&period[1]);
+
+        #ifdef FAKE_DAY
+        timeinfo->tm_mday = FAKE_DAY;
+        #endif
+
+        #ifdef FAKE_MONTH
+        timeinfo->tm_mon = FAKE_MONTH - 1;
+        #endif
+
+        #ifdef FAKE_YEAR
+        timeinfo->tm_year = FAKE_YEAR - 1900;
+        #endif
+
+        timeinfo->tm_mday--;
+        timeinfo->tm_hour = timeinfo->tm_min = timeinfo->tm_sec = 0;
+        timeinfo->tm_isdst = 0;
+        period[1] = mktime(timeinfo);
+    }
     
     if (period[1] < period[0])
     {
@@ -1890,9 +1944,15 @@ void handle_flood_for_entries(ThisPeer *peer, Message *msgp, int sd)
         SCOPE_LOCAL, are put into req_entries to be asked to this
         peer's neighbors. */
 
+    printf("register\n");
+    print_entries_dsc(&peer->entries);
+
     req_entry = request->required_entries->first;
     while (req_entry != NULL) 
     {
+        printf("checking %ld %d %d\n", req_entry->timestamp, req_entry->flags, req_entry->period_len);
+        print_entry(req_entry);
+
         found_entry = search_entry(
             peer->entries.last, 
             req_entry->timestamp, 
@@ -1916,6 +1976,8 @@ void handle_flood_for_entries(ThisPeer *peer, Message *msgp, int sd)
                 removed_entry = req_entry;
             }
         }
+        else
+            printf("entry NOT found\n");
 
         req_entry = req_entry->next;  
         free(removed_entry);  
