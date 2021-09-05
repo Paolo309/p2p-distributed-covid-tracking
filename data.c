@@ -1,5 +1,7 @@
 #include "data.h"
 
+char _ser_buffer[2048];
+
 /**
  * Convert a string representation of a date into a time_t value.
  * String format: "%Y:%m:%d", example: "2020:03:01" 
@@ -139,6 +141,7 @@ time_t get_enf_of_period(Entry *entry)
 void init_entry_list(EntryList *list)
 {
     list->first = list->last = NULL;
+    list->length = 0;
 }
 
 /**
@@ -157,6 +160,8 @@ void free_entry_list(EntryList *list)
         free(p);
         p = tmp;
     }
+
+    list->length = 0;
 }
 
 /**
@@ -165,7 +170,19 @@ void free_entry_list(EntryList *list)
  */
 bool is_entry_list_empty(EntryList *list)
 {
-    return list->first == NULL;
+    /* if (list->length == 0 && (list->last != NULL))
+        printf("WARNING 1.a: invalid list pointers\n");
+
+    if (list->length == 0 && (list->first != NULL))
+        printf("WARNING 1.b: invalid list pointers\n");
+
+    if (list->length == 1 && (list->first != list->last || list->first == NULL))
+        printf("WARNING 2: invalid list pointers\n");
+
+    if (list->length > 1 && (list->first == list->last || list->first == NULL || list->last == NULL))
+        printf("WARNING 3: invalid list pointers\n"); */
+    
+    return list->length == 0;
 }
 
 /**
@@ -205,6 +222,8 @@ void load_register_from_file(EntryList *entries, const char* file_name)
         
         if (entries->first == NULL)
             entries->first = tmp_entry;
+        
+        entries->length++;
     }
     
     entries->last = tmp_entry;
@@ -242,6 +261,7 @@ void merge_entry_lists(EntryList *dest, EntryList *src, bool strict)
     {
         dest->first = src->first;
         dest->last = src->last;
+        dest->length = src->length;
         return;
     }
     
@@ -323,7 +343,10 @@ void merge_entry_lists(EntryList *dest, EntryList *src, bool strict)
         /* keep updated the pointer to the last entry in dest: b is now after a */
         if (a == dest->last)
             dest->last = b;
-        
+
+        dest->length++;
+        /* src->length--; */ /* TODO correct? */
+
         b = tmp_prev;
     }
     
@@ -348,6 +371,8 @@ void merge_entry_lists(EntryList *dest, EntryList *src, bool strict)
         
         /* keep updated the pointer to the first entry in dest */
         dest->first = src->first;
+
+        dest->length += (src->length - dest->length);
     }
 }
 
@@ -370,6 +395,7 @@ void add_entry(EntryList *entries, Entry *entry)
         /* add entry to list */
         entries->last = entries->first = entry;
         entry->next = entry->prev = NULL;
+        entries->length++;
         return;
     }
     
@@ -420,6 +446,8 @@ void add_entry(EntryList *entries, Entry *entry)
                 succ->prev = entry;
             else /* it is the last entry */
                 entries->last = entry;
+
+            entries->length++;
             
             return;
         }
@@ -433,6 +461,8 @@ void add_entry(EntryList *entries, Entry *entry)
     entry->next = entries->first;
     entry->prev = NULL;
     entries->first = entry;
+
+    entries->length++;
 }
 
 /**
@@ -455,6 +485,8 @@ void remove_entry(EntryList *entries, Entry *entry)
         entry->prev->next = entry->next;
     else
         entries->first = entry->next;
+    
+    entries->length--;
 }
 
 void print_entry(Entry *entry) 
@@ -507,70 +539,85 @@ void print_entry(Entry *entry)
     printf("\n");
 }
 
-void print_entries_asc(EntryList *list)
+void print_entries_asc(EntryList *list, const char* text)
 {
     Entry* p = list->first;
     
+    if (text == NULL)
+        printf("==== %d entries ascending ====\n", list->length);
+    else
+        printf("==== %s (%d) ====\n", text, list->length);
+
     while (p)
     {
         print_entry(p);        
         p = p->next;
     }
+
+    printf("====================\n");
 }
 
-void print_entries_dsc(EntryList *list)
+void print_entries_dsc(EntryList *list, const char *text)
 {
     Entry* p = list->last;
     
+    if (text == NULL)
+        printf("==== %d entries ascending ====\n", list->length);
+    else
+        printf("==== %s (%d) ====\n", text, list->length);
+
     while (p)
     {
         print_entry(p);
         p = p->prev;
     }
+
+    printf("====================\n");
 }
 
-char *serialize_entries(char *buffer, EntryList *list)
+char* allocate_entry_list_buffer(int n)
 {
-    int32_t count;
-    char *start_buffer;
+    /* TODO handle n = 0 and empty lists in general */
+    size_t size = sizeof(int32_t) + n * ( sizeof(time_t) + 4 * sizeof(int32_t));
+    return malloc(size);
+}
+
+char *serialize_entries(char *dest, EntryList *list)
+{
     Entry *entry;
 
-    start_buffer = buffer;
-    buffer += sizeof(int32_t);
+    *(int32_t*)dest = htonl(list->length);
+    dest += sizeof(int32_t);
 
-    count = 0;
     entry = list->first;
-
     while (entry)
     {
-        *(time_t*)buffer = entry->timestamp;
-        buffer += sizeof(time_t);
+        *(time_t*)dest = htonl(entry->timestamp);
+        dest += sizeof(time_t);
 
-        *((int32_t*)buffer + 0) = entry->flags;
-        *((int32_t*)buffer + 1) = entry->tamponi;
-        *((int32_t*)buffer + 2) = entry->nuovi_casi;
-        *((int32_t*)buffer + 3) = entry->period_len;
+        *((int32_t*)dest + 0) = htonl(entry->flags);
+        *((int32_t*)dest + 1) = htonl(entry->tamponi);
+        *((int32_t*)dest + 2) = htonl(entry->nuovi_casi);
+        *((int32_t*)dest + 3) = htonl(entry->period_len);
 
-        buffer += 4 * sizeof(int32_t);
+        dest += 4 * sizeof(int32_t);
 
-        count++;
         entry = entry->next;
     }
 
-    *(int32_t*)start_buffer = count;
-
-    return buffer;
+    return dest;
 }
 
-char *deserialize_entries(char *buffer, EntryList *list)
+char *deserialize_entries(char *src, EntryList *list)
 {
     int32_t count;
     Entry *entry, *prec;
 
-    count = *(int32_t*)buffer;
-    buffer += sizeof(int32_t);
+    count = ntohl(*(int32_t*)src);
+    src += sizeof(int32_t);
 
     init_entry_list(list);
+    list->length = count;
 
     entry = NULL;
     prec = NULL;
@@ -579,15 +626,15 @@ char *deserialize_entries(char *buffer, EntryList *list)
     {
         entry = create_entry_empty();
 
-        entry->timestamp = *(time_t*)buffer;
-        buffer += sizeof(time_t);
+        entry->timestamp = ntohl(*(time_t*)src);
+        src += sizeof(time_t);
 
-        entry->flags      = *((int32_t*)buffer + 0);
-        entry->tamponi    = *((int32_t*)buffer + 1);
-        entry->nuovi_casi = *((int32_t*)buffer + 2);
-        entry->period_len = *((int32_t*)buffer + 3);
+        entry->flags      = ntohl(*((int32_t*)src + 0));
+        entry->tamponi    = ntohl(*((int32_t*)src + 1));
+        entry->nuovi_casi = ntohl(*((int32_t*)src + 2));
+        entry->period_len = ntohl(*((int32_t*)src + 3));
 
-        buffer += 4 * sizeof(int32_t);
+        src += 4 * sizeof(int32_t);
 
         entry->prev = prec;
 
@@ -603,7 +650,7 @@ char *deserialize_entries(char *buffer, EntryList *list)
 
     list->last = entry;
 
-    return buffer;
+    return src;
 }
 
 Entry *search_entry(Entry *from, time_t timestamp, int32_t flags, int32_t period_len)
@@ -629,8 +676,8 @@ int main_test()
     EntryList entries, others;
     Entry *tmp;    
     time_t tmp_time;
-    char buff[1024];
-    char buff2[1024];
+    char buff2[4096];
+    char* buff3 = NULL;
 
     init_entry_list(&entries);
     init_entry_list(&others);
@@ -638,7 +685,7 @@ int main_test()
     load_register_from_file(&entries, FNAME_REGISTER);
     
     printf("entries\n");
-    print_entries_asc(&entries);
+    print_entries_asc(&entries, NULL);
     
     tmp_time = str_to_time("2020:01:12");
     tmp = create_entry(tmp_time, 100, 23, SCOPE_GLOBAL);
@@ -654,21 +701,29 @@ int main_test()
     add_entry(&others, tmp);
     
     printf("others\n");
-    print_entries_asc(&others);
+    print_entries_asc(&others, NULL);
     
     merge_entry_lists(&entries, &others, COPY_STRICT);
     
     printf("\nentries\n");
-    print_entries_asc(&entries);
+    print_entries_asc(&entries, NULL);
     
     printf("others\n");
-    print_entries_asc(&others);
+    print_entries_asc(&others, NULL);
 
-    serialize_entries(buff, &entries);
-    memcpy(buff2, buff, 1024);
+    printf("\nserializing\n");
+    print_entries_asc(&entries, NULL);
+
+    buff3 = allocate_entry_list_buffer(entries.length);
+    serialize_entries(buff3, &entries);
+
+    memcpy(buff2, buff3, 1024);
+
+    init_entry_list(&others);
     deserialize_entries(buff2, &others);
+
     printf("deserialized\n");
-    print_entries_asc(&others);
+    print_entries_asc(&others, NULL);
 
     
     /* printf("\n\nentries dsc\n");

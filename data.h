@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
+#include <arpa/inet.h>
 #define __USE_XOPEN
 #include <time.h>
 
@@ -74,6 +75,7 @@ typedef struct Entry {
 } Entry;
 
 typedef struct EntryList {
+    int length;
     Entry *first;
     Entry *last;
 } EntryList;
@@ -99,11 +101,12 @@ void add_entry(EntryList *entries, Entry *entry);
 void remove_entry(EntryList *entries, Entry *entry);
 
 void print_entry(Entry *entry);
-void print_entries_asc(EntryList *list);
-void print_entries_dsc(EntryList *list);
+void print_entries_asc(EntryList *list, const char *text);
+void print_entries_dsc(EntryList *list, const char *text);
 
-char *serialize_entries(char *buffer, EntryList *list);
-char *deserialize_entries(char *buffer, EntryList *list);
+char* allocate_entry_list_buffer(int n);
+char *serialize_entries(char *dest, EntryList *list);
+char *deserialize_entries(char *src, EntryList *list);
 
 Entry *search_entry(Entry *from, time_t timestamp, int32_t flags, int32_t period_len);
 

@@ -29,7 +29,8 @@ typedef struct Message {
     uint32_t body_len;
     uint32_t req_num;
     uint32_t id;
-    char body[MAX_BODY_LEN];
+    /* char body[MAX_BODY_LEN]; */
+    char *body;
 } Message;
 
 void serialize_message(char *dest, Message *msgp);

@@ -45,6 +45,11 @@ int validate_port(const char *str_port)
     return raw_port;
 }
 
+void send_entries(EntryList *list, int sd)
+{
+
+}
+
 /* in_port_t get_port(int sd)
 {
     struct sockaddr_in addr;
@@ -116,6 +121,8 @@ in_port_t get_peer_port(Message *msgp, int n)
 #define STATE_STARTED 2
 #define STATE_STARTING_FLOOD 3
 #define STATE_HANDLING_FLOOD 4
+#define STATE_STOPPING 5
+#define STATE_STOPPED 6
 
 #define NUM_LAST_REQUESTS 3
 #define REQUESTER_SELF -1
@@ -287,6 +294,7 @@ int send_start_msg_to_dserver(ThisPeer *peer)
 
     msg.type = MSG_START;
     msg.body_len = 0;
+    msg.body = NULL;
 
     ret = send_message(peer->dserver, &msg);
     if (ret == -1)
@@ -300,6 +308,32 @@ int send_start_msg_to_dserver(ThisPeer *peer)
     set_timeout(peer, 3);
     disable_user_input(peer);
     add_desc(peer, peer->dserver);
+
+    printf("waiting for server response...\n");
+
+    return 0;
+}
+
+int send_stop_msg_to_dserver(ThisPeer *peer)
+{
+    Message msg;
+    int ret;
+
+    msg.type = MSG_STOP;
+    msg.body_len = 0;
+    msg.body = NULL;
+
+    ret = send_message(peer->dserver, &msg);
+    if (ret == -1)
+    {
+        printf("could not send start message to discover server\n");
+        return -1;
+    }
+
+    peer->state = STATE_STOPPING;
+
+    set_timeout(peer, 3);
+    disable_user_input(peer);
 
     printf("waiting for server response...\n");
 
@@ -493,7 +527,7 @@ int remove_not_needed_totals(EntryList *needed_totals, EntryList *needed_vars)
 
 
 /*----------------------------------------------
- |  UTILITY FUNCTIONS HANDLE FLOODINGS
+ |  UTILITY FUNCTIONS TO HANDLE FLOODINGS
  *---------------------------------------------*/
 
 /**
@@ -506,14 +540,16 @@ int remove_not_needed_totals(EntryList *needed_totals, EntryList *needed_vars)
  * 
  * @param peer 
  * @param request 
+ * @return number of neighbors connected to    
  */
-void connect_to_neighbors(ThisPeer *peer, FloodRequest *request)
+int connect_to_neighbors(ThisPeer *peer, FloodRequest *request)
 {
-    int sd, ret;
+    int sd, ret, how_many;
     socklen_t slen;
     GraphNode *nbr;
 
     slen = sizeof(struct sockaddr_in);
+    how_many = 0;
 
     nbr = peer->neighbors.first;
     while (nbr)
@@ -522,25 +558,29 @@ void connect_to_neighbors(ThisPeer *peer, FloodRequest *request)
         if (sd == -1)
         {
             perror("socket error");
-            return;
+            return how_many;
         }
 
         ret = connect(sd, (struct sockaddr *)&nbr->peer->addr, slen);
         if (ret == -1)
         {
             perror("connect error");
-            return;
+            return how_many;
         }
+
+        printf("connected to peer %hd (sd: %d)\n", ntohs(nbr->peer->addr.sin_port), sd);
 
         _add_desc(&peer->master_write_set, &peer->fdmax_w, sd);
         if (request != NULL)
         {
-            printf("adding involved sd %d\n", sd);
             _add_desc(&request->peers_involved, NULL, sd);
         }
         
+        how_many++;
         nbr = nbr->next;
     }
+
+    return how_many;
 }
 
 bool ask_aggr_to_neighbors_v2(ThisPeer *peer, EntryList *req_aggr, EntryList *recvd_aggr)
@@ -573,18 +613,22 @@ bool ask_aggr_to_neighbors_v2(ThisPeer *peer, EntryList *req_aggr, EntryList *re
 
         msg.type = MSG_REQ_DATA;
         msg.id = get_peer_id(peer);
+        msg.body = allocate_entry_list_buffer(req_aggr->length);
         msg.body_len = serialize_entries(msg.body, req_aggr) - msg.body;
         
         printf("asking aggr to %d\n", ntohs(nbr->peer->addr.sin_port));
 
-        ret = send_message(sd, &msg);
+        ret = send_message(sd, &msg); /* TODO sending entries */
         if (ret == -1)
         {
             printf("could not send REQ_DATA to peer %d\n", ntohs(nbr->peer->addr.sin_port));
+            free(msg.body);
             return false;
         }
 
-        ret = recv_message(sd, &msg);
+        free(msg.body);
+
+        ret = recv_message(sd, &msg); /* TODO receiving entries */
         if (ret == -1)
         {
             printf("error while receiving REPLY_DATA\n");
@@ -662,18 +706,22 @@ bool ask_aggr_to_neighbors(ThisPeer *peer, EntryList *req_aggr)
 
         msg.type = MSG_REQ_DATA;
         msg.id = get_peer_id(peer);
+        msg.body = allocate_entry_list_buffer(req_aggr->length);
         msg.body_len = serialize_entries(msg.body, req_aggr) - msg.body;
         
         printf("asking aggr to %d\n", ntohs(nbr->peer->addr.sin_port));
 
-        ret = send_message(sd, &msg);
+        ret = send_message(sd, &msg); /* TODO sending entries */
         if (ret == -1)
         {
             printf("could not send REQ_DATA to peer %d\n", ntohs(nbr->peer->addr.sin_port));
+            free(msg.body);
             return false;
         }
 
-        ret = recv_message(sd, &msg);
+        free(msg.body);
+
+        ret = recv_message(sd, &msg); /* TODO receiving entries */
         if (ret == -1)
         {
             printf("error while receiving REPLY_DATA\n");
@@ -743,16 +791,20 @@ void ask_aggr_to_peers(
         msg.type = MSG_REQ_DATA;
         msg.id = get_peer_id(peer);
         msg.req_num = rand();
+        msg.body = allocate_entry_list_buffer(req_entries->length);
         msg.body_len = serialize_entries(msg.body, req_entries) - msg.body;
 
-        ret = send_message(sd, &msg);
+        ret = send_message(sd, &msg); /* TODO sending entries */
         if (ret == -1)
         {
             printf("could not send MSG_REQ_DATA to peer %d\n", peers[i]);
+            free(msg.body);
             return;
         }
 
-        ret = recv_message(sd, &msg);
+        free(msg.body);
+
+        ret = recv_message(sd, &msg); /* TODO receiving entries */
         if (ret == -1)
         {
             printf("error while receiving MSG_REPLY_DATA\n");
@@ -766,13 +818,21 @@ void ask_aggr_to_peers(
         init_entry_list(&tmp_data_received);
         deserialize_entries(msg.body, &tmp_data_received);
 
-        printf("received:\n");
-        print_entries_asc(&tmp_data_received);
+        print_entries_asc(&tmp_data_received, "peer sent");
+/* 
+        is_entry_list_empty(recvd_entries);
+        printf("RR %d\n", recvd_entries->length);
+        is_entry_list_empty(&tmp_data_received);
 
+        printf("AA\n"); */
         if (!is_entry_list_empty(&tmp_data_received))
         {
+            /* printf("BB\n"); */
             merge_entry_lists(recvd_entries, &tmp_data_received, COPY_SHALLOW);
+            /* printf("CC\n"); */
         }
+
+        /* printf("DD\n"); */
     }
 
     return;
@@ -811,7 +871,7 @@ void show_aggr_var_result(EntryList *result, int type)
         printf("tamponi:\n");
     else
         printf("nuovi casi\n");
-    printf("\t----------------------------n");
+    printf("|\t----------------------------\n");
     
     entry = result->first;
     while (entry)
@@ -935,11 +995,8 @@ void get_aggr_tot(ThisPeer *peer, time_t beg_period, time_t end_period, int type
 
     printf("missing some entries needed to compute the sum\n");
 
-    printf("entries found:\n");
-    print_entries_asc(&found_entries);
-
-    printf("%d missing entries:\n", missing_entries);
-    print_entries_asc(&not_found_entries);
+    print_entries_asc(&found_entries, "entries found");
+    print_entries_asc(&not_found_entries, "missing entries");
 
 
     /*----------------------------------------------
@@ -960,7 +1017,7 @@ void get_aggr_tot(ThisPeer *peer, time_t beg_period, time_t end_period, int type
         /* add the found entry to the local register */
         add_entry(&peer->entries, aggr_requested.first);
         printf("register updated\n");
-        /* print_entries_asc(&peer->entries); */
+        /* print_entries_asc(&peer->entries, "REGISTER"); */
 
         return;
     }
@@ -1004,9 +1061,11 @@ void get_aggr_tot(ThisPeer *peer, time_t beg_period, time_t end_period, int type
 
     request->required_entries->first = not_found_entries.first;
     request->required_entries->last = not_found_entries.last;
+    request->required_entries->length = not_found_entries.length;
 
     /* initializing response message as empty */
     request->response_msg = malloc(sizeof(Message));
+    request->response_msg->body = malloc(256);
     set_num_of_peers(request->response_msg, 0);
 
     /* since the flooding is verbose, listening for user input is useless */
@@ -1088,11 +1147,8 @@ void get_aggr_var(ThisPeer *peer, time_t beg_period, time_t end_period, int type
 
     printf("not all variations found in local register\n");
 
-    printf("found var entries:\n");
-    print_entries_asc(&found_var_entries);
-
-    printf("not found var entries:\n");
-    print_entries_asc(&not_found_var_entries);
+    print_entries_asc(&found_var_entries, "var entries found");
+    print_entries_asc(&not_found_var_entries, "var entries not found");
 
 
     /*----------------------------------------------
@@ -1144,18 +1200,15 @@ void get_aggr_var(ThisPeer *peer, time_t beg_period, time_t end_period, int type
 
         merge_entry_lists(&peer->entries, &entries_res, COPY_STRICT);
         printf("register updated\n");
-        /* print_entries_asc(&peer->entries); */
+        /* print_entries_asc(&peer->entries, "REGISTER"); */
 
         return;
     }
 
     printf("missing some entries needed to compute all variations\n");
 
-    printf("totals found:\n");
-    print_entries_asc(&found_tot_entries);
-
-    printf("%d missing totals:\n", missing_entries);
-    print_entries_asc(&not_found_tot_entries);
+    print_entries_asc(&found_tot_entries, "totals found");
+    print_entries_asc(&not_found_tot_entries, "totals missing");
 
 
     /*----------------------------------------------
@@ -1175,13 +1228,13 @@ void get_aggr_var(ThisPeer *peer, time_t beg_period, time_t end_period, int type
         /* add the found entries found to the local register */
         merge_entry_lists(&peer->entries, &found_var_entries, COPY_STRICT);
         printf("register updated\n");
-        /* print_entries_asc(&peer->entries); */
+        /* print_entries_asc(&peer->entries, "REGISTER"); */
 
         return;
     }
 
-    printf("some variation is still missing:\n");
-    print_entries_asc(&not_found_var_entries);
+    printf("some variation is still missing\n");
+    print_entries_asc(&not_found_var_entries, "variations missing");
 
     /* TODO this must be done here? */
     /* add the aggr entries found to the local register */
@@ -1197,7 +1250,7 @@ void get_aggr_var(ThisPeer *peer, time_t beg_period, time_t end_period, int type
     ); */
 
     printf("totals needed to compute the missing variations:\n");
-    print_entries_asc(&not_found_tot_entries);
+    print_entries_asc(&not_found_tot_entries, NULL);
 
     /*----------------------------------------------
     |  launching flood for entries
@@ -1234,9 +1287,11 @@ void get_aggr_var(ThisPeer *peer, time_t beg_period, time_t end_period, int type
 
     request->required_entries->first = not_found_tot_entries.first;
     request->required_entries->last = not_found_tot_entries.last;
+    request->required_entries->length = not_found_tot_entries.length;
 
     /* initializing response message as empty */
     request->response_msg = malloc(sizeof(Message));
+    request->response_msg->body = malloc(256);
     set_num_of_peers(request->response_msg, 0);
 
     /* since the flooding is verbose, listening for user input is useless */
@@ -1267,15 +1322,13 @@ void finalize_get_aggr_tot(ThisPeer *peer, in_port_t peers[], int n, int req_num
 
     FloodRequest *request = get_request_by_num(peer, req_num);
     
-    printf("asking this entries to peers:\n");
-    print_entries_asc(request->required_entries);
+    print_entries_asc(request->required_entries, "asking this entries to peers");
 
     init_entry_list(&received_entries);
 
     ask_aggr_to_peers(peer, request->required_entries, &received_entries, peers, n);
 
-    printf("entries received:\n");
-    print_entries_asc(&received_entries);
+    print_entries_asc(&received_entries, "entries received");
 
     entry = received_entries.first;
     while (entry)
@@ -1288,7 +1341,7 @@ void finalize_get_aggr_tot(ThisPeer *peer, in_port_t peers[], int n, int req_num
     merge_entry_lists(&peer->entries, &received_entries, COPY_STRICT);
 
     /* printf("updated register:\n");
-    print_entries_asc(&peer->entries); */
+    print_entries_asc(&peer->entries, "REGISTER"); */
 
     /* some entry may still be missing: no peer has those entries so it's
         assumed that their values are zero and are created and added to this
@@ -1308,8 +1361,7 @@ void finalize_get_aggr_tot(ThisPeer *peer, in_port_t peers[], int n, int req_num
 
     if (missing_entries != 0)
     {
-        printf("entries still missing:\n");
-        print_entries_asc(&not_found_entries);
+        print_entries_asc(&not_found_entries, "entries still missing");
         printf("adding them to local register\n");
 
         entry = not_found_entries.first;
@@ -1323,7 +1375,7 @@ void finalize_get_aggr_tot(ThisPeer *peer, in_port_t peers[], int n, int req_num
     }
 
     printf("updated register:\n");
-    print_entries_asc(&peer->entries);
+    print_entries_asc(&peer->entries, "REGISTER");
 
     /* TODO free the lists, even those in the request */
 
@@ -1352,15 +1404,13 @@ void finalize_get_aggr_var(ThisPeer *peer, in_port_t peers[], int n, int req_num
 
     FloodRequest *request = get_request_by_num(peer, req_num);
 
-    printf("asking this entries to peers:\n");
-    print_entries_asc(request->required_entries);
+    print_entries_asc(request->required_entries, "asking this entries to peers");
 
     init_entry_list(&received_entries);
 
     ask_aggr_to_peers(peer, request->required_entries, &received_entries, peers, n);
     
-    printf("entries received:\n");
-    print_entries_asc(&received_entries);
+    print_entries_asc(&received_entries, "entries received");
 
     entry = received_entries.first;
     while (entry)
@@ -1373,7 +1423,7 @@ void finalize_get_aggr_var(ThisPeer *peer, in_port_t peers[], int n, int req_num
     merge_entry_lists(&peer->entries, &received_entries, COPY_STRICT);
 
     /* printf("updated register:\n");
-    print_entries_asc(&peer->entries); */
+    print_entries_asc(&peer->entries, "REGISTER"); */
 
     /* some entry may still be missing: no peer has those entries so it's
         assumed that their values are zero and are created and added to this
@@ -1412,8 +1462,7 @@ void finalize_get_aggr_var(ThisPeer *peer, in_port_t peers[], int n, int req_num
 
     if (missing_entries != 0)
     {
-        printf("entries still missing:\n");
-        print_entries_asc(&not_found_tot_entries);
+        print_entries_asc(&not_found_tot_entries, "entries still missing");
         printf("adding them to local register\n");
 
         entry = not_found_tot_entries.first;
@@ -1428,7 +1477,7 @@ void finalize_get_aggr_var(ThisPeer *peer, in_port_t peers[], int n, int req_num
     }
 
     printf("updated register:\n");
-    print_entries_asc(&peer->entries);
+    print_entries_asc(&peer->entries, "REGISTER");
 
     /* TODO free the lists, even those in the request */
 
@@ -1569,7 +1618,7 @@ int cmd_add(ThisPeer *peer, int argc, char **argv)
     tmp_entry = create_entry(mktime(timeinfo), tmp_tamponi, tmp_ncasi, 0);
     add_entry(&peer->entries, tmp_entry);
 
-    print_entries_asc(&peer->entries);
+    print_entries_asc(&peer->entries, "REGISTER");
 
     /* TODO remove memory leak in data when adding existing entry */
 
@@ -1739,20 +1788,31 @@ int cmd_stop(ThisPeer *peer, int argc, char **argv)
     Message msg;
     int ret;
 
+    if (peer->state == STATE_OFF)
+    {
+        printf("peer not started\n");
+        return 0;
+    }
+
+    if (peer->state != STATE_STARTED)
+    {
+        printf("cannot stop peer now\n");
+        return 0;
+    }
+
     msg.type = MSG_STOP;
     msg.body_len = 0;
+    msg.body = NULL;
 
     ret = send_message(peer->dserver, &msg);
 
-    if (ret == -1)
+    if (ret <= 0)
     {
         printf("could not send stop message to discovery server\n");
         return -1;
     }
 
-    /* TODO send all records to other peers */
-
-    return 0;
+    return send_stop_msg_to_dserver(peer);
 }
 
 #define NUM_CMDS 4
@@ -1831,6 +1891,26 @@ void handle_set_neighbors_response(ThisPeer *peer, Message *msgp)
     enable_user_input(peer);
 }
 
+void handle_stop_response(ThisPeer *peer, Message *msgp)
+{
+    int req_num;
+    FloodRequest *request;
+
+    if (msgp->type == MSG_STOP && peer->state == STATE_STOPPING)
+    {
+        print_entries_asc(&peer->entries, "sending this entries to neighbors");
+
+        req_num = rand();
+        request_serviced(peer, req_num);
+        request = get_request_by_num(peer, req_num);
+
+        request->nbrs_remaining = connect_to_neighbors(peer, request);
+
+        peer->state = STATE_STOPPED;
+        return;
+    }
+}
+
 
 
 /*----------------------------------------------
@@ -1849,8 +1929,8 @@ void handle_req_data(ThisPeer *peer, Message *msgp, int sd)
     init_entry_list(&req_entries);
     deserialize_entries(msgp->body, &req_entries);
 
-    printf("peer %d requires entries\n", msgp->id);
-    print_entries_asc(&req_entries);
+    printf("peer %d requires entries:\n", msgp->id);
+    print_entries_asc(&req_entries, NULL);
 
     init_entry_list(&found_entries);
     
@@ -1882,24 +1962,24 @@ void handle_req_data(ThisPeer *peer, Message *msgp, int sd)
         free(removed_entry);
     }
 
-    printf("entries available:\n");
-    print_entries_asc(&found_entries);
-
-    printf("entries NOT available:\n");
-    print_entries_asc(&req_entries);
+    print_entries_asc(&found_entries, "available entries");
+    print_entries_asc(&req_entries, "missing entries");
 
     msgp->type = MSG_REPLY_DATA;
     msgp->id = get_peer_id(peer);
+    msgp->body = allocate_entry_list_buffer(found_entries.length + req_entries.length);
     buff = serialize_entries(msgp->body, &found_entries);
-    buff = serialize_entries(buff, &req_entries);
+    buff = serialize_entries(buff, &req_entries);/* TODO why!?!? */
     msgp->body_len = buff - msgp->body;
 
-    ret = send_message(sd, msgp);
+    ret = send_message(sd, msgp); /* TODO sending entries */
     if (ret == -1)
     {
         printf("could not send entries to requester\n");
         return;
     }
+
+    free(msgp->body);
 
     printf("entries sent to requester\n");
 }
@@ -1933,7 +2013,7 @@ void handle_flood_for_entries(ThisPeer *peer, Message *msgp, int sd)
         
         set_num_of_peers(msgp, 0);
         
-        ret = send_message(sd, msgp);
+        ret = send_message(sd, msgp); /* TODO sending peers */
         if (ret == -1)
         {
             printf("could not send empty FLOOD response\n");
@@ -1951,8 +2031,8 @@ void handle_flood_for_entries(ThisPeer *peer, Message *msgp, int sd)
     init_entry_list(request->required_entries);
     deserialize_entries(msgp->body, request->required_entries);
 
-    printf("I've been asked to look for:\n");
-    print_entries_asc(request->required_entries);
+    /* printf("I've been asked to look for:\n"); */
+    print_entries_asc(request->required_entries, "I've been asked to look for");
 
     /* TODO it's redauntant */
     request->found_entries = malloc(sizeof(EntryList));
@@ -1962,9 +2042,6 @@ void handle_flood_for_entries(ThisPeer *peer, Message *msgp, int sd)
         register. The ones that are not found, or are found but have
         SCOPE_LOCAL, are put into req_entries to be asked to this
         peer's neighbors. */
-
-    printf("register\n");
-    print_entries_dsc(&peer->entries);
 
     req_entry = request->required_entries->first;
     while (req_entry != NULL) 
@@ -2002,11 +2079,11 @@ void handle_flood_for_entries(ThisPeer *peer, Message *msgp, int sd)
         free(removed_entry);  
     }
     
-    printf("I've got:\n");
-    print_entries_asc(request->found_entries);
+    /* printf("I've got:\n"); */
+    print_entries_asc(request->found_entries, "entries I've got");
 
-    printf("Flooding for:\n");
-    print_entries_asc(request->required_entries);
+    /* printf("Flooding for:\n"); */
+    print_entries_asc(request->required_entries, "flooding for");
 
     /* establishing connections with neighbors */
     /* A request will be actually sent to a neighbor when it will
@@ -2033,6 +2110,7 @@ void handle_flood_for_entries(ThisPeer *peer, Message *msgp, int sd)
     request->response_msg->type = MSG_ENTRIES_FOUND;
     request->response_msg->req_num = msgp->req_num;
     request->response_msg->id = get_peer_id(peer); /* for debugging */
+    request->response_msg->body = malloc(256);
     
     request->callback = NULL;
 
@@ -2071,14 +2149,18 @@ void do_flood_for_entries(ThisPeer *peer, int sd)
     msg.type = MSG_FLOOD_FOR_ENTRIES;
     msg.req_num = request->number;
     msg.id = get_peer_id(peer);
+    msg.body = allocate_entry_list_buffer(request->required_entries->length);
     msg.body_len = serialize_entries(msg.body, request->required_entries) - msg.body;
 
-    ret = send_message(sd, &msg);
+    ret = send_message(sd, &msg); /* TODO sending entries */
     if (ret == -1) 
     {
         printf("could not send FLOOD request\n");
+        free(msg.body);
         return;
     }
+
+    free(msg.body);
 
     printf("sent request to neighbor (%d)\n", request->nbrs_remaining);
 
@@ -2150,7 +2232,7 @@ void handle_flood_response(ThisPeer *peer, Message *msgp, int sd)
             printf("last response: sending it to sd %d\n", request->requester_sd);
             
             ret = send_message(request->requester_sd, request->response_msg);
-            if (ret == -1)
+            if (ret == -1) /* TODO sending peers */
             {
                 printf("could not send (relay) FLOOD response\n");
                 return;
@@ -2232,6 +2314,58 @@ void handle_flood_response(ThisPeer *peer, Message *msgp, int sd)
 
 }
 
+void do_share_register(ThisPeer *peer, int sd)
+{
+    Message msg;
+    int ret;
+
+    FloodRequest *request = get_request_by_sd(peer, sd);
+    
+    printf("sending entries to neighbors (sd: %d)\n", sd);
+
+    msg.type = MSG_ADD_ENTRY;
+    msg.id = get_peer_id(peer);
+    msg.body_len = serialize_entries(msg.body, &peer->entries) - msg.body;
+
+    ret = send_message(sd, &msg); /* sending entries */
+    if (ret == -1)
+    {
+        printf("could not send entries to neighbor\n");
+        return;
+    }
+    
+    close(sd);
+    _remove_desc(&peer->master_write_set, &peer->fdmax_w, sd);
+
+    request->nbrs_remaining--;
+
+    if (request->nbrs_remaining == 0) 
+    {
+        printf("entries sent to all neighbors\nstopped\n");
+        peer->state = STATE_OFF;
+
+        /* TODO reset peer state so that start can be called again */
+
+        enable_user_input(peer);
+        clear_timeout(peer);
+
+        return;
+    }
+}
+
+void handle_add_entry(ThisPeer *peer, Message *msgp)
+{
+    EntryList new_entries;
+
+    printf("received new entries from peer %hd\n", msgp->id);
+
+    deserialize_entries(msgp->body, &new_entries);
+
+    merge_entry_lists(&peer->entries, &new_entries, COPY_STRICT);
+
+    print_entries_asc(&peer->entries, "REGISTER");
+}
+
 
 /* ########## DEMULTIPLEXING ########## */
 
@@ -2286,9 +2420,14 @@ void demux_peer_request(ThisPeer *peer, int sd)
     if (FD_ISSET(sd, &peer->master_write_set))
     {
         printf("socket ready to write\n");
+
         if (peer->state == STATE_HANDLING_FLOOD ||
             peer->state == STATE_STARTING_FLOOD)
             do_flood_for_entries(peer, sd);
+
+        else if (peer->state == STATE_STOPPED)
+            do_share_register(peer, sd);
+
         return;
     }
 
@@ -2327,6 +2466,10 @@ void demux_peer_request(ThisPeer *peer, int sd)
         /* close(sd);
         remove_desc(peer, sd); */
     }
+    else if (msg.type == MSG_ADD_ENTRY)
+    {
+        handle_add_entry(peer, &msg);
+    }
 }
 
 void demux_server_request(ThisPeer *peer)
@@ -2352,6 +2495,10 @@ void demux_server_request(ThisPeer *peer)
     if (msg.type == MSG_SET_NBRS)
     {
         handle_set_neighbors_response(peer, &msg);
+    }
+    else if (msg.type == MSG_STOP)
+    {
+        handle_stop_response(peer, &msg);
     }
 }
 
@@ -2383,7 +2530,7 @@ int main(int argc, char** argv)
     /* TODO check if file was opened successfully */
     sprintf(register_file, "reg_%d.txt", ret);
     load_register_from_file(&peer.entries, register_file);
-    print_entries_asc(&peer.entries);
+    print_entries_asc(&peer.entries, "REGISTER");
 
     add_desc(&peer, STDIN_FILENO);
 
@@ -2420,8 +2567,12 @@ int main(int argc, char** argv)
         {
             if (peer.state == STATE_STARTING)
                 send_start_msg_to_dserver(&peer);
-            if (peer.state == STATE_HANDLING_FLOOD ||
-                peer.state == STATE_STARTING_FLOOD)
+
+            else if (peer.state == STATE_STARTING)
+                send_stop_msg_to_dserver(&peer);
+
+            else if (peer.state == STATE_HANDLING_FLOOD ||
+                     peer.state == STATE_STARTING_FLOOD)
                 set_timeout(&peer, rand() % 4);
         }
 

@@ -35,6 +35,7 @@ void tell_neighbors(int sd, struct sockaddr_in *addr, Peer *peer)
 {
     int ret;
     Message msg;
+    msg.body = malloc(512);
 
     printf("telling to %d\n", ntohs(addr->sin_port));
 
@@ -182,7 +183,7 @@ int main(int argc, char** argv)
             /* reset source port */
             /* client_addr.sin_port = tmp_port; */
 
-            if (neighbors == NULL)
+            if (neighbors== NULL)
             {
                 printf("peer was not connected\n");
                 fflush(stdout);
@@ -212,6 +213,15 @@ int main(int argc, char** argv)
             node_p = neighbors;
             while (node_p)
             {
+                msg.type = MSG_STOP;
+                msg.body_len = 0;
+
+                ret = send_message_to(sd, &msg, &client_addr);
+                if (ret == -1)
+                {
+                    printf("could not send stop acknowledgement to peer\n");
+                }
+
                 tell_neighbors(sd, &node_p->peer->addr, node_p->peer);
                 node_p = node_p->next;
             }       
