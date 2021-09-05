@@ -779,6 +779,7 @@ void ask_aggr_to_peers(
 }
 
 
+
 /*----------------------------------------------
  |  FUNCTIONS TO HANDLE COMMAND 'get' and FLOODING
  *---------------------------------------------*/
@@ -831,7 +832,7 @@ void show_aggr_var_result(EntryList *result, int type)
 
 /**
  * Called when users executes the command 'get sum'. If it launches a
- * floodding, then this is called again when the flooding is finished.
+ * flooding, then this is called again when the flooding is finished.
  * 
  * @param peer 
  * @param beg_period 
@@ -1022,7 +1023,7 @@ void finalize_get_aggr_var(ThisPeer *peer, in_port_t peers[], int n, int req_num
 
 /**
  * Called when users executes the command 'get var'. If it launches a
- * floodding, then this is called again when the flooding is finished.
+ * flooding, then this is called again when the flooding is finished.
  * 
  * @param peer 
  * @param beg_period 
@@ -1383,7 +1384,7 @@ void finalize_get_aggr_var(ThisPeer *peer, in_port_t peers[], int n, int req_num
     init_entry_list(&found_var_entries);
     init_entry_list(&not_found_var_entries);
 
-    /* fill not_found_var_entries to remove antries in  not_found_tot_entries
+    /* fill not_found_var_entries to remove entries in  not_found_tot_entries
         that are not needed to compute the missing variations */
     search_needed_entries(
         peer, 
