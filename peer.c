@@ -2343,7 +2343,10 @@ void do_share_register(ThisPeer *peer, int sd)
 
     msg.type = MSG_ADD_ENTRY;
     msg.id = get_peer_id(peer);
-    msg.body = allocate_entry_list_buffer(peer->entries.length);
+    /* msg.body = allocate_entry_list_buffer(peer->entries.length); */
+    /* printf(">>>> %ld\n", (sizeof(int32_t) + peer->entries.length * ( sizeof(time_t) + 4 * sizeof(int32_t)))); */
+    is_entry_list_empty(&peer->entries);
+    msg.body = malloc(1000);
     msg.body_len = serialize_entries(msg.body, &peer->entries) - msg.body;
 
     ret = send_message(sd, &msg); /* sending entries */

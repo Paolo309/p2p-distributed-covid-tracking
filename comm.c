@@ -56,7 +56,7 @@ void deserialize_message(char *src, Message *msgp)
     if (msgp->body != NULL)
         memcpy(msgp->body, src + MSG_HEADER_LEN, msgp->body_len);
 }
-
+int ABORT = 0;
 /**
  * Send message to destination, which is implicit in case of a connected socket,
  * or specified by *to otherwise. Leave to as NULL if the socket is connected.
@@ -71,22 +71,39 @@ int send_message_to(int sd, Message *msgp, struct sockaddr_in* to)
 {
     int ret, len;
     int save_errno;
+    int tot_bytes;
     
     if (msgp == NULL) return -1;
     
     serialize_message(_buffer, msgp);
     
     len = MSG_HEADER_LEN + msgp->body_len;
+    printf("sending %d bytes\n", len);
     
-    ret = sendto(sd, _buffer, len, 0, (struct sockaddr*)to, sizeof(*to));
-    save_errno = errno;    
+    tot_bytes = 0;
+    do
+    {
+        if (ABORT)
+            exit(EXIT_FAILURE);
+        ret = sendto(sd, _buffer + tot_bytes, len - tot_bytes, 0, (struct sockaddr*)to, sizeof(*to));
+        save_errno = errno;
+        printf("ret = %d\n", ret);
+        tot_bytes += ret;
 
-    if (ret < len)
+    } while (ret > 0 && tot_bytes < len);
+
+    if (ret != 0 && ret < len)
     {
         if (ret == -1) perror("sendto error");
         else printf("sendto error: sent %d bytes instead of %d\n", ret, len);
         errno = save_errno;
         return -1;
+    }
+
+    if (ret == 0)
+    {
+        printf("sendto: connection closed\n");
+        return 0;
     }
     
     return ret;
@@ -119,6 +136,7 @@ int recv_message_from(int sd, Message *msgp, struct sockaddr_in* from)
     int ret;
     socklen_t socklen, *lenp;
     int save_errno;
+    int expected_len, tot_bytes;
     
     if (msgp == NULL) return -1;
     
@@ -129,11 +147,27 @@ int recv_message_from(int sd, Message *msgp, struct sockaddr_in* from)
     }
     else 
         lenp = NULL;
+
+    expected_len = 0;
+    tot_bytes = 0;
+    do
+    {
+        ret = recvfrom(sd, _buffer + tot_bytes, BUFSIZE - tot_bytes, 0, (struct sockaddr*)from, lenp);
+        save_errno = errno;
+        tot_bytes += ret;
+        
+        printf("ret = %d\n", ret);
+        if (expected_len == 0 && ret > MSG_HEADER_LEN) {
+            expected_len = ntohl(*(uint32_t*)(_buffer + 1)) + MSG_HEADER_LEN;
+            printf("expecting %d bytes\n", expected_len);
+        }
+        
+        if (tot_bytes >= expected_len)
+            break;
+
+    } while (ret > 0);
     
-    ret = recvfrom(sd, _buffer, BUFSIZE, 0, (struct sockaddr*)from, lenp);
-    save_errno = errno;
-    
-    if (ret > 0 && ret < MSG_HEADER_LEN)
+    if (ret != 0 && tot_bytes < expected_len)
     {
         if (ret == -1) perror("recvfrom error");
         else printf("recvfrom error: received %d bytes instead of %d (header length)\n", ret, MSG_HEADER_LEN);
@@ -147,6 +181,8 @@ int recv_message_from(int sd, Message *msgp, struct sockaddr_in* from)
         return 0;
     }
     
+    printf("received %d bytes\n", tot_bytes);
+
     deserialize_message(_buffer, msgp);
     
     if (ret < MSG_HEADER_LEN + msgp->body_len)

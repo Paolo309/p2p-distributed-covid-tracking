@@ -9,10 +9,10 @@
 #include "data.h"
 #include "network.h"
 
-#define BUFSIZE 1024
+#define BUFSIZE 8192
 #define MSG_HEADER_LEN 13
 #define MAX_BODY_LEN 512
-
+int ABORT;
 #define MSG_START 0
 #define MSG_SET_NBRS 1
 #define MSG_STOP 3

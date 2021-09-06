@@ -176,7 +176,7 @@ void free_entry_list(EntryList *list)
  */
 bool is_entry_list_empty(EntryList *list)
 {
-    /* if (list->length == 0 && (list->last != NULL))
+    if (list->length == 0 && (list->last != NULL))
         printf("WARNING 1.a: invalid list pointers\n");
 
     if (list->length == 0 && (list->first != NULL))
@@ -186,7 +186,7 @@ bool is_entry_list_empty(EntryList *list)
         printf("WARNING 2: invalid list pointers\n");
 
     if (list->length > 1 && (list->first == list->last || list->first == NULL || list->last == NULL))
-        printf("WARNING 3: invalid list pointers\n"); */
+        printf("WARNING 3: invalid list pointers\n");
     
     return list->length == 0;
 }
@@ -539,7 +539,8 @@ void print_entry(Entry *entry)
 void print_entries_asc(EntryList *list, const char* text)
 {
     Entry* p = list->first;
-    
+    int count = 0;
+
     if (text == NULL)
         printf("==== %d entries ascending ====\n", list->length);
     else
@@ -549,9 +550,17 @@ void print_entries_asc(EntryList *list, const char* text)
     {
         print_entry(p);        
         p = p->next;
+        count++;
     }
 
     printf("====================\n");
+    
+    if (count != list->length)
+    {
+        printf("\n\n\n##############################\n");
+        printf("l %d, c %d\n", list->length, count);
+        printf("##############################\n\n\n\n");
+    }
 }
 
 void print_entries_dsc(EntryList *list, const char *text)
@@ -582,6 +591,9 @@ char* allocate_entry_list_buffer(int n)
 char *serialize_entries(char *dest, EntryList *list)
 {
     Entry *entry;
+    int count = 0;
+
+    printf("TO SERIALIZE %d\n", list->length);
 
     *(int32_t*)dest = htonl(list->length);
     dest += sizeof(int32_t);
@@ -598,9 +610,12 @@ char *serialize_entries(char *dest, EntryList *list)
         *((int32_t*)dest + 3) = htonl(entry->period_len);
 
         dest += 4 * sizeof(int32_t);
+        count++;
 
         entry = entry->next;
     }
+
+    printf("ACT SERIALIZED %d\n", count);
 
     return dest;
 }
