@@ -16,6 +16,11 @@ time_t str_to_time(const char *str)
     p = strptime(str, "%Y:%m:%d", &time);
     if (p != &str[TIMESTAMP_STRLEN - 1])
         return -1;
+    /* if (time.tm_isdst == 0)
+        time.tm_hour = -1;
+    else
+        printf("\nA\n"); */
+    time.tm_isdst = -1;
     return mktime(&time);
 }
 
@@ -30,7 +35,7 @@ void time_to_str(char *str, time_t *time)
     struct tm *timeinfo;
     timeinfo = localtime(time);
     if (timeinfo->tm_hour || timeinfo->tm_min || timeinfo->tm_sec)
-        printf("{ERR}");
+        printf("{ERR %d:%d:%d}", timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec);
     strftime(str, TIMESTAMP_STRLEN, "%Y:%m:%d", timeinfo);
 }
 
@@ -130,6 +135,7 @@ time_t get_enf_of_period(Entry *entry)
 {
     struct tm *time = localtime(&entry->timestamp);
     time->tm_mday += entry->period_len - 1;
+    time->tm_isdst = -1;
     return mktime(time);
 }
 
@@ -498,24 +504,15 @@ void print_entry(Entry *entry)
 
     if (entry->flags & ENTRY_AGGREG)
     {
-        /* time = localtime(&entry->timestamp);
-        strftime(str_time, TIMESTAMP_STRLEN, "%Y-%m-%d", time); */
         time_to_str(str_time, &entry->timestamp);
         printf("%s", str_time);
 
-        /* time->tm_mday += entry->period_len - 1;
-        tmp_end_period = mktime(time);
-
-        time = localtime(&tmp_end_period);
-        strftime(str_time, TIMESTAMP_STRLEN, "%Y-%m-%d", time); */
         tmp_end_period = get_enf_of_period(entry);
         time_to_str(str_time, &tmp_end_period);
         printf("-%s (%d days)", str_time, entry->period_len);
     }
     else
     {
-        /* time = localtime(&entry->timestamp);
-        strftime(str_time, TIMESTAMP_STRLEN, "%Y-%m-%d", time); */
         time_to_str(str_time, &entry->timestamp);
         printf("%s ", str_time);
     }

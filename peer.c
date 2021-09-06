@@ -11,9 +11,9 @@
 #include "graph.h"
 
 /* comment out the next two defines to user the real date */
-#define FAKE_DAY 28
+/* #define FAKE_DAY 28
 #define FAKE_MONTH 2
-#define FAKE_YEAR 2021
+#define FAKE_YEAR 2021 */
 
 #define REG_CLOSING_HOUR 23
 
@@ -21,6 +21,19 @@
 #define REQ_VARIAZIONE 1
 #define REQ_TAMPONI 2
 #define REQ_NUOVI_CASI 3
+
+time_t add_days(time_t time, int days)
+{
+    struct tm *timeinfo = localtime(&time);
+    timeinfo->tm_mday += days;
+    timeinfo->tm_isdst = -1;
+    return mktime(timeinfo);
+}
+
+int diff_days(time_t time1, time_t time0)
+{
+    return difftime(time1, time0) / 86400;
+}
 
 int validate_port(const char *str_port)
 {
@@ -434,11 +447,9 @@ int search_needed_entries(ThisPeer *peer, EntryList *found, EntryList *not_found
     Entry *found_entry;
     Entry *new_entry;
     time_t t_day;
-    struct tm *tm_day;
     int count = 0;
 
     t_day = end;
-    tm_day = localtime(&t_day);
     
     /* for each day of the period */
     while (difftime(t_day, start) >= 0)
@@ -461,9 +472,7 @@ int search_needed_entries(ThisPeer *peer, EntryList *found, EntryList *not_found
         }
 
         /* move back one day */
-        tm_day->tm_mday--;
-        t_day = mktime(tm_day);
-        tm_day = localtime(&t_day);
+        t_day = add_days(t_day, -1);
     }
 
     return count;
@@ -850,13 +859,13 @@ void finalize_get_aggr_tot(ThisPeer *peer, in_port_t peers[], int n, int req_num
 
 void show_aggr_tot_result(Entry *result, int type)
 {
-    printf("+------------------------------------------\n");
+    printf("\n+------------------------------------------\n");
     printf("|\tRESULT: totale ");
     if (type == REQ_TAMPONI)
         printf("tamponi = %d\n", result->tamponi);
     else
         printf("nuovi casi = %d\n", result->nuovi_casi);
-    printf("+------------------------------------------\n");
+    printf("+------------------------------------------\n\n");
 }
 
 void show_aggr_var_result(EntryList *result, int type)
@@ -865,7 +874,7 @@ void show_aggr_var_result(EntryList *result, int type)
     time_t time;
     char time_str[TIMESTAMP_STRLEN];
     
-    printf("+------------------------------------------\n");
+    printf("\n+------------------------------------------\n");
     printf("|\tRESULT: variazioni di ");
     if (type == REQ_TAMPONI)
         printf("tamponi:\n");
@@ -887,7 +896,7 @@ void show_aggr_var_result(EntryList *result, int type)
 
         entry = entry->next;
     }
-    printf("+------------------------------------------\n");
+    printf("+------------------------------------------\n\n");
 }
 
 /**
@@ -932,7 +941,8 @@ void get_aggr_tot(ThisPeer *peer, time_t beg_period, time_t end_period, int type
     /* period_len = period length in seconds / seconds in a day
        does not account for leap seconds
        includes the first and last days of the period, hence the +1 */
-    period_len = (int)difftime(end_period, beg_period) / 86400 + 1;
+    /* period_len = (int)difftime(end_period, beg_period) / 86400 + 1; */
+    period_len = diff_days(end_period, beg_period) + 1;
 
     entry = search_entry(peer->entries.last, beg_period, flags, period_len);
 
@@ -1374,8 +1384,8 @@ void finalize_get_aggr_tot(ThisPeer *peer, in_port_t peers[], int n, int req_num
         }
     }
 
-    printf("updated register:\n");
-    print_entries_asc(&peer->entries, "REGISTER");
+    /* printf("updated register:\n");
+    print_entries_asc(&peer->entries, "REGISTER"); */
 
     /* TODO free the lists, even those in the request */
 
@@ -1476,8 +1486,8 @@ void finalize_get_aggr_var(ThisPeer *peer, in_port_t peers[], int n, int req_num
         }
     }
 
-    printf("updated register:\n");
-    print_entries_asc(&peer->entries, "REGISTER");
+    /* printf("updated register:\n");
+    print_entries_asc(&peer->entries, "REGISTER"); */
 
     /* TODO free the lists, even those in the request */
 
@@ -1610,7 +1620,7 @@ int cmd_add(ThisPeer *peer, int argc, char **argv)
     #endif
 
     timeinfo->tm_hour = timeinfo->tm_min = timeinfo->tm_sec = 0;
-    timeinfo->tm_isdst = 0;
+    timeinfo->tm_isdst = -1;
 
     /* TODO ugly: can directly pass time_t to create_entry */
     /* strftime(str_time, TIMESTAMP_STRLEN, "%Y-%m-%d", timeinfo); */
@@ -1712,7 +1722,7 @@ int cmd_get(ThisPeer *peer, int argc, char **argv)
 
         timeinfo->tm_mday--;
         timeinfo->tm_hour = timeinfo->tm_min = timeinfo->tm_sec = 0;
-        timeinfo->tm_isdst = 0;
+        timeinfo->tm_isdst = -1;
         period[1] = mktime(timeinfo);
     }
     
@@ -1771,7 +1781,7 @@ int cmd_get(ThisPeer *peer, int argc, char **argv)
     }
     time_to_str(str_time, &period[1]);
     printf("E %s", str_time);
-    printf("\n---\n");
+    printf("\n---\n\n");
 
     /* the aggregation is done "asynchronously" */
 
@@ -1815,12 +1825,19 @@ int cmd_stop(ThisPeer *peer, int argc, char **argv)
     return send_stop_msg_to_dserver(peer);
 }
 
-#define NUM_CMDS 4
+int cmd_reg(ThisPeer* peer, int argc, char** argv)
+{
+    printf("\n");
+    print_entries_asc(&peer->entries, "REGISTER");
+    return 0;
+}
 
-char *cmd_str[NUM_CMDS] = { "start", "add", "get", "stop" };
+#define NUM_CMDS 5
+
+char *cmd_str[NUM_CMDS] = { "start", "add", "get", "stop", "reg" };
 
 int (*cmd_func[NUM_CMDS])(ThisPeer*, int, char**) = 
-    { &cmd_start, &cmd_add, &cmd_get, &cmd_stop };
+    { &cmd_start, &cmd_add, &cmd_get, &cmd_stop, &cmd_reg };
 
 
 
