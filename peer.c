@@ -1903,6 +1903,7 @@ void handle_stop_response(ThisPeer *peer, Message *msgp)
         req_num = rand();
         request_serviced(peer, req_num);
         request = get_request_by_num(peer, req_num);
+        FD_ZERO(&request->peers_involved);
 
         request->nbrs_remaining = connect_to_neighbors(peer, request);
 
@@ -2325,6 +2326,7 @@ void do_share_register(ThisPeer *peer, int sd)
 
     msg.type = MSG_ADD_ENTRY;
     msg.id = get_peer_id(peer);
+    msg.body = allocate_entry_list_buffer(peer->entries.length);
     msg.body_len = serialize_entries(msg.body, &peer->entries) - msg.body;
 
     ret = send_message(sd, &msg); /* sending entries */
