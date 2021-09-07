@@ -84,7 +84,7 @@ time_t str_to_time(const char *str);
 void time_to_str(char *str, time_t *time);
 Entry *create_entry_empty();
 Entry *copy_entry(Entry *src);
-Entry *create_entry(time_t timestamp, int32_t tamponi, int32_t nuovi_casi, uint8_t flags);
+Entry *create_entry(time_t timestamp, int32_t tamponi, int32_t nuovi_casi, uint8_t flags, int32_t period_len);
 int cmp_entries(Entry *a, Entry *b);
 
 time_t get_enf_of_period(Entry *entry);

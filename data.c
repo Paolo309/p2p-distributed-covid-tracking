@@ -1,7 +1,5 @@
 #include "data.h"
 
-char _ser_buffer[2048];
-
 /**
  * Convert a string representation of a date into a time_t value.
  * String format: "%Y:%m:%d", example: "2020:03:01" 
@@ -13,13 +11,11 @@ time_t str_to_time(const char *str)
 {
     char *p;
     struct tm time = { 0 };
+
     p = strptime(str, "%Y:%m:%d", &time);
     if (p != &str[TIMESTAMP_STRLEN - 1])
         return -1;
-    /* if (time.tm_isdst == 0)
-        time.tm_hour = -1;
-    else
-        printf("\nA\n"); */
+
     time.tm_isdst = -1;
     return mktime(&time);
 }
@@ -32,11 +28,19 @@ time_t str_to_time(const char *str)
  */
 void time_to_str(char *str, time_t *time)
 {
+    int w;
     struct tm *timeinfo;
     timeinfo = localtime(time);
+
+    w = strftime(str, TIMESTAMP_STRLEN, "%Y:%m:%d", timeinfo);
+
+    /* making sure the time is correctly set */
     if (timeinfo->tm_hour || timeinfo->tm_min || timeinfo->tm_sec)
-        printf("{ERR %d:%d:%d}", timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec);
-    strftime(str, TIMESTAMP_STRLEN, "%Y:%m:%d", timeinfo);
+        sprintf(
+            str + w, 
+            "{ERR %d:%d:%d}", 
+            timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec
+        );
 }
 
 /**
@@ -74,7 +78,7 @@ Entry *copy_entry(Entry *src)
  * @param flags Either SCOPE_LOCAL or ENTRY_GLOBAL
  * @return The new entry
  */
-Entry *create_entry(time_t timestamp, int32_t tamponi, int32_t nuovi_casi, uint8_t flags)
+Entry *create_entry(time_t timestamp, int32_t tamponi, int32_t nuovi_casi, uint8_t flags, int32_t period_len)
 {
     Entry* tmp = malloc(sizeof(Entry));
 
@@ -83,7 +87,7 @@ Entry *create_entry(time_t timestamp, int32_t tamponi, int32_t nuovi_casi, uint8
     tmp->nuovi_casi = nuovi_casi;
     tmp->flags = flags;
     tmp->prev = tmp->next = NULL;
-    tmp->period_len = 0;
+    tmp->period_len = period_len;
 
     return tmp;
 }
@@ -95,6 +99,7 @@ Entry *create_entry(time_t timestamp, int32_t tamponi, int32_t nuovi_casi, uint8
  * (3) if ENTRY_TYPEs are equal, AGGREG_DAILY comes first;
  * (4) if ENTRY_AGGREGs are equal, shortest period length first;
  * (5) if period lengths are equal, the entries are equal.
+ * TODO correct comment
  * 
  * @param a 
  * @param b 
@@ -217,7 +222,7 @@ void load_register_from_file(EntryList *entries, const char* file_name)
 
     while (fscanf(fp, "%s %d %d %d", tmp_str_time, &flags, &tmp_tamponi, &tmp_ncasi) != EOF) {
         tmp_time = str_to_time(tmp_str_time);
-        tmp_entry = create_entry(tmp_time, tmp_tamponi, tmp_ncasi, flags);
+        tmp_entry = create_entry(tmp_time, tmp_tamponi, tmp_ncasi, flags, 0);
         
         if (tmp_entry->flags & ENTRY_AGGREG)  
             fscanf(fp, "%d", &tmp_entry->period_len);
@@ -570,6 +575,7 @@ void print_entries_asc(EntryList *list, const char* text)
 void print_entries_dsc(EntryList *list, const char *text)
 {
     Entry* p = list->last;
+    int count = 0;
     
     if (text == NULL)
         printf("==== %d entries ascending ====\n", list->length);
@@ -580,24 +586,39 @@ void print_entries_dsc(EntryList *list, const char *text)
     {
         print_entry(p);
         p = p->prev;
+        count++;
     }
 
     printf("====================\n");
+
+    if (count != list->length)
+    {
+        printf("\n\n\n##############################\n");
+        printf("l %d, c %d\n", list->length, count);
+        printf("##############################\n\n\n\n");
+    }
 }
 
 char* allocate_entry_list_buffer(int n)
 {
-    /* TODO handle n = 0 and empty lists in general */
-    size_t size = sizeof(int32_t) + n * ( sizeof(time_t) + 4 * sizeof(int32_t));
+    size_t size;
+
+    if (n <= 0) return NULL;
+
+    size = sizeof(int32_t) + n * ( sizeof(time_t) + 4 * sizeof(int32_t) );
     return malloc(size);
 }
 
+/**
+ * Serialize list of entries into buffer.
+ * 
+ * @param dest 
+ * @param list 
+ * @return pointer to the byte after the last one written
+ */
 char *serialize_entries(char *dest, EntryList *list)
 {
     Entry *entry;
-    int count = 0;
-
-    printf("TO SERIALIZE %d\n", list->length);
 
     *(int32_t*)dest = htonl(list->length);
     dest += sizeof(int32_t);
@@ -614,16 +635,21 @@ char *serialize_entries(char *dest, EntryList *list)
         *((int32_t*)dest + 3) = htonl(entry->period_len);
 
         dest += 4 * sizeof(int32_t);
-        count++;
 
         entry = entry->next;
     }
 
-    printf("ACT SERIALIZED %d\n", count);
-
     return dest;
 }
 
+/**
+ * Deserialize buffer into list of entries. The list does not
+ * need to be initialized, but it must be allocated.
+ * 
+ * @param dest 
+ * @param list 
+ * @return pointer to the byte after the last one read
+ */
 char *deserialize_entries(char *src, EntryList *list)
 {
     int32_t count;
@@ -673,8 +699,7 @@ Entry *search_entry(Entry *from, time_t timestamp, int32_t flags, int32_t period
 {
     Entry *entry, *model;
 
-    model = create_entry(timestamp, 0, 0, flags);
-    model->period_len = period_len;
+    model = create_entry(timestamp, 0, 0, flags, period_len);
 
     entry = from;
 
@@ -704,15 +729,15 @@ int main_test()
     print_entries_asc(&entries, NULL);
     
     tmp_time = str_to_time("2020:01:12");
-    tmp = create_entry(tmp_time, 100, 23, SCOPE_GLOBAL);
+    tmp = create_entry(tmp_time, 100, 23, SCOPE_GLOBAL, 0);
     add_entry(&others, tmp);
 
     tmp_time = str_to_time("2020:02:07");
-    tmp = create_entry(tmp_time, 200, 46, SCOPE_LOCAL | TYPE_VARIATION);
+    tmp = create_entry(tmp_time, 200, 46, SCOPE_LOCAL | TYPE_VARIATION, 0);
     add_entry(&others, tmp);
 
     tmp_time = str_to_time("2020:02:08");
-    tmp = create_entry(tmp_time, 2000, 460, SCOPE_GLOBAL | TYPE_TOTAL | AGGREG_PERIOD);
+    tmp = create_entry(tmp_time, 2000, 460, SCOPE_GLOBAL | TYPE_TOTAL | AGGREG_PERIOD, 0);
     tmp->period_len = 3;
     add_entry(&others, tmp);
     

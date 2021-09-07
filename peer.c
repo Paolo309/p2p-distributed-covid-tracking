@@ -416,9 +416,9 @@ void compute_aggr_var(ThisPeer *peer, EntryList *entries, EntryList *entries_res
                 entry->timestamp,
                 entry->next->tamponi - entry->tamponi,
                 entry->next->nuovi_casi - entry->nuovi_casi,
-                flags
+                flags,
+                2
             );
-            tmp->period_len = 2;
             add_entry(entries_res, tmp);
         }
         entry = entry->prev;
@@ -459,14 +459,18 @@ int search_needed_entries(ThisPeer *peer, EntryList *found, EntryList *not_found
         if (found_entry != NULL && (found_entry->flags & ENTRY_SCOPE) == SCOPE_GLOBAL)
         {
             /* TODO create copy entry function */
-            new_entry = create_entry(found_entry->timestamp, found_entry->tamponi, found_entry->nuovi_casi, found_entry->flags);
-            new_entry->period_len = found_entry->period_len;
+            /* new_entry = create_entry(
+                found_entry->timestamp, 
+                found_entry->tamponi, 
+                found_entry->nuovi_casi, 
+                found_entry->flags,
+                found_entry->period_len); */
+            new_entry = copy_entry(found_entry);
             add_entry(found, new_entry);
         }
         else
         {
-            new_entry = create_entry(t_day, 0, 0, flags);
-            new_entry->period_len = period_len;
+            new_entry = create_entry(t_day, 0, 0, flags, period_len);
             add_entry(not_found, new_entry);
             count++;
         }
@@ -987,9 +991,8 @@ void get_aggr_tot(ThisPeer *peer, time_t beg_period, time_t end_period, int type
 
         /* entry which will contain the result of the aggregation */
         entry_res = create_entry(
-            beg_period, 0, 0, AGGREG_PERIOD | SCOPE_GLOBAL | TYPE_TOTAL
+            beg_period, 0, 0, AGGREG_PERIOD | SCOPE_GLOBAL | TYPE_TOTAL, period_len
         );
-        entry_res->period_len = period_len;
 
         compute_aggr_tot(peer, &found_entries, entry_res);
 
@@ -1014,8 +1017,7 @@ void get_aggr_tot(ThisPeer *peer, time_t beg_period, time_t end_period, int type
     *---------------------------------------------*/    
 
     init_entry_list(&aggr_requested);
-    entry = create_entry(beg_period, 0, 0, AGGREG_PERIOD | SCOPE_GLOBAL | TYPE_TOTAL);
-    entry->period_len = period_len;
+    entry = create_entry(beg_period, 0, 0, AGGREG_PERIOD | SCOPE_GLOBAL | TYPE_TOTAL, period_len);
     add_entry(&aggr_requested, entry);
 
     data_found = ask_aggr_to_neighbors(peer, &aggr_requested);
@@ -1625,7 +1627,12 @@ int cmd_add(ThisPeer *peer, int argc, char **argv)
     /* TODO ugly: can directly pass time_t to create_entry */
     /* strftime(str_time, TIMESTAMP_STRLEN, "%Y-%m-%d", timeinfo); */
     
-    tmp_entry = create_entry(mktime(timeinfo), tmp_tamponi, tmp_ncasi, 0);
+    tmp_entry = create_entry(
+        mktime(timeinfo), 
+        tmp_tamponi, tmp_ncasi, 
+        SCOPE_LOCAL | TYPE_TOTAL | AGGREG_DAILY, 
+        0
+    );
     add_entry(&peer->entries, tmp_entry);
 
     print_entries_asc(&peer->entries, "REGISTER");
@@ -2343,10 +2350,8 @@ void do_share_register(ThisPeer *peer, int sd)
 
     msg.type = MSG_ADD_ENTRY;
     msg.id = get_peer_id(peer);
-    /* msg.body = allocate_entry_list_buffer(peer->entries.length); */
-    /* printf(">>>> %ld\n", (sizeof(int32_t) + peer->entries.length * ( sizeof(time_t) + 4 * sizeof(int32_t)))); */
+    msg.body = allocate_entry_list_buffer(peer->entries.length);
     is_entry_list_empty(&peer->entries);
-    msg.body = malloc(1000);
     msg.body_len = serialize_entries(msg.body, &peer->entries) - msg.body;
 
     ret = send_message(sd, &msg); /* sending entries */
