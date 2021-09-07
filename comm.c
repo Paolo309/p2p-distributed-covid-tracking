@@ -81,6 +81,7 @@ int send_message_to(int sd, Message *msgp, struct sockaddr_in* to)
     if (len > BUFSIZE)
     {
         printf("cannot send message: message too large ()\n");
+        exit(EXIT_FAILURE);
         return -1;
     }
 

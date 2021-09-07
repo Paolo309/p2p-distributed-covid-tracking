@@ -1,33 +1,25 @@
 #include "commandline.h"
 
-/**
- * Wait for user input. Expands the input stirng returning the 
- * the array of strings inserted before new line, and its length.
- * 
- * @param argc pointer to where to store the length of the array
- * @return pointer to the array of strings inserted
- */
-char **get_command_line(int *argc)
+char **get_command_line(const char* str, int *argc)
 {
     wordexp_t p;
-    int i, len, check;
-    char buffer[MAX_CMD_LEN];
+    int i, len;
     char **argv;
 
     if (argc == NULL) return NULL;
     
     /* https://www.adoclib.com/blog/how-to-read-from-input-until-newline-is-found-using-scanf.html */
-    check = scanf("%[^\n]%*c", buffer);
+    /* check = scanf("%[^\n]%*c", buffer); */
     
-    if (check == 0)
+    /* if (check == 0)
     {
         getchar();
         *argc = 0;
         return NULL;
-    }
+    } */
     
     /* shell-like expansion of string in buffer into p */
-    if (wordexp(buffer, &p, 0)) /* returns 0 on success */
+    if (wordexp(str, &p, 0)) /* returns 0 on success */
         return NULL;
 
     *argc = p.we_wordc;
@@ -48,6 +40,33 @@ char **get_command_line(int *argc)
 }
 
 /**
+ * Wait for user input. Expands the input stirng returning the 
+ * the array of strings inserted before new line, and its length.
+ * 
+ * @param argc pointer to where to store the length of the array
+ * @return pointer to the array of strings inserted
+ */
+char **scan_command_line(int *argc)
+{
+    int check;
+    char buffer[MAX_CMD_LEN];
+
+    if (argc == NULL) return NULL;
+    
+    /* https://www.adoclib.com/blog/how-to-read-from-input-until-newline-is-found-using-scanf.html */
+    check = scanf("%[^\n]%*c", buffer);
+    
+    if (check == 0)
+    {
+        getchar();
+        *argc = 0;
+        return NULL;
+    }
+
+    return get_command_line(buffer, argc);
+}
+
+/**
  * Free the strings in the given array.
  * 
  * @param argc length of the array
@@ -65,7 +84,7 @@ int main_test_cmd()
     int argc, i;
     char **argv;
 
-    argv = get_command_line(&argc);
+    argv = scan_command_line(&argc);
 
     if (argv == NULL)
     {

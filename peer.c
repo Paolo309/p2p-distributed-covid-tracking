@@ -442,7 +442,7 @@ void compute_aggr_var(ThisPeer *peer, EntryList *entries, EntryList *entries_res
  * @param flags 
  * @return int 
  */
-int search_needed_entries(ThisPeer *peer, EntryList *found, EntryList *not_found, time_t start, time_t end, int32_t period_len, int32_t flags)
+int search_needed_entries(ThisPeer *peer, EntryList *found, EntryList *not_found, time_t start, time_t end, int32_t period_len, int32_t flags, int32_t scope)
 {
     Entry *found_entry;
     Entry *new_entry;
@@ -456,7 +456,8 @@ int search_needed_entries(ThisPeer *peer, EntryList *found, EntryList *not_found
     {
         found_entry = search_entry(peer->entries.last, t_day, flags, period_len);
 
-        if (found_entry != NULL && (found_entry->flags & ENTRY_SCOPE) == SCOPE_GLOBAL)
+        /* if (found_entry != NULL && (found_entry->flags & ENTRY_SCOPE) == SCOPE_GLOBAL) */
+        if (found_entry != NULL && (((found_entry->flags & ENTRY_SCOPE) >= scope) || (scope == -1 && (found_entry->flags & ENTRY_SCOPE) == SCOPE_GLOBAL)))
         {
             /* TODO create copy entry function */
             /* new_entry = create_entry(
@@ -714,6 +715,8 @@ bool ask_aggr_to_neighbors(ThisPeer *peer, EntryList *req_aggr)
         if (ret == -1)
         {
             perror("connect error");
+            printf("cannot connect to neighbor %hd\n", ntohs(nbr->peer->addr.sin_port));
+            exit(EXIT_FAILURE);
             return false;
         }
 
@@ -841,7 +844,8 @@ void ask_aggr_to_peers(
         if (!is_entry_list_empty(&tmp_data_received))
         {
             /* printf("BB\n"); */
-            merge_entry_lists(recvd_entries, &tmp_data_received, COPY_SHALLOW);
+            /* TODO ehy SHALLOW? */
+            merge_entry_lists(recvd_entries, &tmp_data_received, COPY_STRICT);
             /* printf("CC\n"); */
         }
 
@@ -978,7 +982,8 @@ void get_aggr_tot(ThisPeer *peer, time_t beg_period, time_t end_period, int type
         peer, 
         &found_entries, &not_found_entries, 
         beg_period, end_period, 0, /* period_len = 0 days */
-        flags
+        flags,
+        SCOPE_GLOBAL
     );
 
     /* now, not_found_entries, if not empty, contains the entries that
@@ -1010,7 +1015,6 @@ void get_aggr_tot(ThisPeer *peer, time_t beg_period, time_t end_period, int type
 
     print_entries_asc(&found_entries, "entries found");
     print_entries_asc(&not_found_entries, "missing entries");
-
 
     /*----------------------------------------------
     |  asking aggregate to neighbors
@@ -1074,6 +1078,10 @@ void get_aggr_tot(ThisPeer *peer, time_t beg_period, time_t end_period, int type
     request->required_entries->first = not_found_entries.first;
     request->required_entries->last = not_found_entries.last;
     request->required_entries->length = not_found_entries.length;
+
+    request->found_entries->first = found_entries.first;
+    request->found_entries->last = found_entries.last;
+    request->found_entries->length = found_entries.length;
 
     /* initializing response message as empty */
     request->response_msg = malloc(sizeof(Message));
@@ -1147,7 +1155,8 @@ void get_aggr_var(ThisPeer *peer, time_t beg_period, time_t end_period, int type
         peer,
         &found_var_entries, &not_found_var_entries,
         beg_period, act_end_period, 2, /* period_len = 2 days */
-        flags
+        flags,
+        SCOPE_GLOBAL
     );
 
     if (missing_entries == 0)
@@ -1181,7 +1190,8 @@ void get_aggr_var(ThisPeer *peer, time_t beg_period, time_t end_period, int type
         peer, 
         &found_tot_entries, &not_found_tot_entries, 
         beg_period, end_period, 0, /* period_len = 0 days */
-        flags
+        flags,
+        SCOPE_GLOBAL
     );
 
     /* not_found_tot_entries now contains all the entries of TYPE_TOTAL
@@ -1196,6 +1206,8 @@ void get_aggr_var(ThisPeer *peer, time_t beg_period, time_t end_period, int type
         &not_found_tot_entries,
         &not_found_var_entries
     );
+
+    print_entries_asc(&found_tot_entries, "found tot");
 
     flags = AGGREG_PERIOD | SCOPE_GLOBAL | TYPE_VARIATION;
 
@@ -1342,18 +1354,8 @@ void finalize_get_aggr_tot(ThisPeer *peer, in_port_t peers[], int n, int req_num
 
     print_entries_asc(&received_entries, "entries received");
 
-    entry = received_entries.first;
-    while (entry)
-    {   
-        entry->flags |= SCOPE_GLOBAL;
-        entry = entry->next;
-    }
-
     /* add the received entries to the local register */
     merge_entry_lists(&peer->entries, &received_entries, COPY_STRICT);
-
-    /* printf("updated register:\n");
-    print_entries_asc(&peer->entries, "REGISTER"); */
 
     /* some entry may still be missing: no peer has those entries so it's
         assumed that their values are zero and are created and added to this
@@ -1368,7 +1370,8 @@ void finalize_get_aggr_tot(ThisPeer *peer, in_port_t peers[], int n, int req_num
         peer, 
         &found_entries, &not_found_entries, 
         request->beg_period, request->end_period, 0,
-        flags
+        flags,
+        SCOPE_LOCAL
     );
 
     if (missing_entries != 0)
@@ -1386,8 +1389,17 @@ void finalize_get_aggr_tot(ThisPeer *peer, in_port_t peers[], int n, int req_num
         }
     }
 
-    /* printf("updated register:\n");
-    print_entries_asc(&peer->entries, "REGISTER"); */
+    entry = found_entries.first;
+    while (entry)
+    {
+        entry->flags |= SCOPE_GLOBAL;
+        entry = entry->next;
+    }
+
+    merge_entry_lists(&peer->entries, &found_entries, COPY_STRICT);
+
+    printf("updated register:\n");
+    print_entries_asc(&peer->entries, "REGISTER");
 
     /* TODO free the lists, even those in the request */
 
@@ -1424,18 +1436,10 @@ void finalize_get_aggr_var(ThisPeer *peer, in_port_t peers[], int n, int req_num
     
     print_entries_asc(&received_entries, "entries received");
 
-    entry = received_entries.first;
-    while (entry)
-    {   
-        entry->flags |= SCOPE_GLOBAL;
-        entry = entry->next;
-    }
-
     /* add the received entries to the local register */
     merge_entry_lists(&peer->entries, &received_entries, COPY_STRICT);
 
-    /* printf("updated register:\n");
-    print_entries_asc(&peer->entries, "REGISTER"); */
+    print_entries_asc(request->found_entries, "OLD REQUIRED ENTRIES");
 
     /* some entry may still be missing: no peer has those entries so it's
         assumed that their values are zero and are created and added to this
@@ -1452,7 +1456,8 @@ void finalize_get_aggr_var(ThisPeer *peer, in_port_t peers[], int n, int req_num
         peer, 
         &found_var_entries, &not_found_var_entries, 
         request->beg_period, request->end_period, 2,
-        flags
+        flags,
+        -1
     );
 
     flags = AGGREG_DAILY | SCOPE_LOCAL | TYPE_TOTAL;
@@ -1464,7 +1469,8 @@ void finalize_get_aggr_var(ThisPeer *peer, in_port_t peers[], int n, int req_num
         peer, 
         &found_tot_entries, &not_found_tot_entries, 
         request->beg_period, request->end_period, 0,
-        flags
+        flags,
+        -1
     );
 
     missing_entries -= remove_not_needed_totals(
@@ -1488,8 +1494,17 @@ void finalize_get_aggr_var(ThisPeer *peer, in_port_t peers[], int n, int req_num
         }
     }
 
-    /* printf("updated register:\n");
-    print_entries_asc(&peer->entries, "REGISTER"); */
+    entry = found_tot_entries.first;
+    while (entry)
+    {
+        entry->flags |= SCOPE_GLOBAL;
+        entry = entry->next;
+    }
+
+    merge_entry_lists(&peer->entries, &found_tot_entries, COPY_STRICT);
+
+    printf("updated register:\n");
+    print_entries_asc(&peer->entries, "REGISTER");
 
     /* TODO free the lists, even those in the request */
 
@@ -1841,7 +1856,7 @@ int cmd_reg(ThisPeer* peer, int argc, char** argv)
 
 #define NUM_CMDS 5
 
-char *cmd_str[NUM_CMDS] = { "start", "add", "get", "stop", "reg" };
+char *cmd_str[NUM_CMDS] = { "s", "add", "get", "stop", "reg" };
 
 int (*cmd_func[NUM_CMDS])(ThisPeer*, int, char**) = 
     { &cmd_start, &cmd_add, &cmd_get, &cmd_stop, &cmd_reg };
@@ -2016,7 +2031,7 @@ void handle_req_data(ThisPeer *peer, Message *msgp, int sd)
 
 void handle_flood_for_entries(ThisPeer *peer, Message *msgp, int sd)
 {
-    EntryList empty_list_response;
+    EntryList empty_list_response, found_entries;
     Entry *req_entry, *found_entry, *removed_entry;
     int ret;
     FloodRequest *request;
@@ -2059,9 +2074,7 @@ void handle_flood_for_entries(ThisPeer *peer, Message *msgp, int sd)
     /* printf("I've been asked to look for:\n"); */
     print_entries_asc(request->required_entries, "I've been asked to look for");
 
-    /* TODO it's redauntant */
-    request->found_entries = malloc(sizeof(EntryList));
-    init_entry_list(request->found_entries);
+    init_entry_list(&found_entries);
 
     /* iterating through requested entries and searching them in the 
         register. The ones that are not found, or are found but have
@@ -2071,8 +2084,8 @@ void handle_flood_for_entries(ThisPeer *peer, Message *msgp, int sd)
     req_entry = request->required_entries->first;
     while (req_entry != NULL) 
     {
-        printf("checking %ld %d %d\n", req_entry->timestamp, req_entry->flags, req_entry->period_len);
-        print_entry(req_entry);
+        /* printf("checking %ld %d %d\n", req_entry->timestamp, req_entry->flags, req_entry->period_len);
+        print_entry(req_entry); */
 
         found_entry = search_entry(
             peer->entries.last, 
@@ -2086,7 +2099,7 @@ void handle_flood_for_entries(ThisPeer *peer, Message *msgp, int sd)
         if (found_entry != NULL)
         {
             found_entry = copy_entry(found_entry);
-            add_entry(request->found_entries, found_entry);
+            add_entry(&found_entries, found_entry);
 
             /* global entries have the same value for all the peers.
                 The neighbors wont be asked for global entries if this
@@ -2097,18 +2110,39 @@ void handle_flood_for_entries(ThisPeer *peer, Message *msgp, int sd)
                 removed_entry = req_entry;
             }
         }
-        else
-            printf("entry NOT found\n");
+        /* else
+            printf("entry NOT found\n"); */
 
         req_entry = req_entry->next;  
         free(removed_entry);  
     }
     
     /* printf("I've got:\n"); */
-    print_entries_asc(request->found_entries, "entries I've got");
+    print_entries_asc(&found_entries, "entries I've got");
 
     /* printf("Flooding for:\n"); */
     print_entries_asc(request->required_entries, "flooding for");
+
+    /* TODO handle case with no required entries */
+
+    if (is_entry_list_empty(request->required_entries))
+    {
+        request->response_msg = malloc(sizeof(Message));
+        request->response_msg->type = MSG_ENTRIES_FOUND;
+        request->response_msg->req_num = msgp->req_num;
+        request->response_msg->id = get_peer_id(peer); /* for debugging */
+        request->response_msg->body = malloc(256);
+        set_num_of_peers(request->response_msg, 0);
+        add_peer_to_msg(request->response_msg, ntohs(peer->addr.sin_port));
+
+        ret = send_message(sd, request->response_msg);
+        if (ret == -1) /* TODO sending peers */
+        {
+            printf("could not send (immediate) FLOOD response\n");
+            return;
+        }
+        return;
+    }
 
     /* establishing connections with neighbors */
     /* A request will be actually sent to a neighbor when it will
@@ -2142,15 +2176,15 @@ void handle_flood_for_entries(ThisPeer *peer, Message *msgp, int sd)
     set_num_of_peers(request->response_msg, 0);
 
     /* if this peer has some of the requested entries */
-    if (!is_entry_list_empty(request->found_entries))
+    if (!is_entry_list_empty(&found_entries))
     {
         /* add this peer to the aggregated response message */
-        printf("adding myself in\n");
+        printf("adding my address to aggregated response\n");
         add_peer_to_msg(request->response_msg, ntohs(peer->addr.sin_port));
     }
     else
     {
-        printf("NOT adding myself in\n");
+        printf("NOT adding my address to aggregated response\n");
     }
 }
 
@@ -2204,6 +2238,7 @@ void do_flood_for_entries(ThisPeer *peer, int sd)
     }
     
     request->nbrs_remaining++;
+    printf("remaining %d\n", request->nbrs_remaining);
 }
 
 /**
@@ -2221,7 +2256,6 @@ void handle_flood_response(ThisPeer *peer, Message *msgp, int sd)
     FloodRequest *request = get_request_by_num(peer, msgp->req_num);
 
     printf("received flood response from %d (sd: %d)\n", msgp->id, sd);
-
 
     if (request->requester_sd != REQUESTER_SELF)
     {
@@ -2301,7 +2335,7 @@ void handle_flood_response(ThisPeer *peer, Message *msgp, int sd)
                 /* while (num_of_peers >= 0)
                     printf("> peer: %d\n", peers[--num_of_peers]);
                 num_of_peers = get_num_of_peers(peer->req_resp_msg); */
-
+                
                 (*request->callback)(peer, peers, num_of_peers, request->number);
                 /* TODO when to free msgp? */
             }
@@ -2404,7 +2438,7 @@ void demux_user_input(ThisPeer *peer)
     int i, argc;
     char **argv;
 
-    argv = get_command_line(&argc);
+    argv = scan_command_line(&argc);
 
     if (argc == 0) return;
     
@@ -2450,13 +2484,17 @@ void demux_peer_request(ThisPeer *peer, int sd)
     if (FD_ISSET(sd, &peer->master_write_set))
     {
         printf("socket ready to write\n");
-
+        
         if (peer->state == STATE_HANDLING_FLOOD ||
             peer->state == STATE_STARTING_FLOOD)
             do_flood_for_entries(peer, sd);
-
+        
         else if (peer->state == STATE_STOPPED)
             do_share_register(peer, sd);
+        else {
+            printf("error sd: %d, state: %d\n", sd, peer->state);
+            exit(EXIT_FAILURE);
+        }
 
         return;
     }
@@ -2541,6 +2579,10 @@ int main(int argc, char** argv)
     int ret, i, fdmax, desc_ready;
     char register_file[30];
 
+    /* used to send fake commands */
+    int argc2;
+    char **argv2;
+
     if (argc != 2)
     {
         printf("usage: ./peer <porta>\n");
@@ -2563,6 +2605,17 @@ int main(int argc, char** argv)
     print_entries_asc(&peer.entries, "REGISTER");
 
     add_desc(&peer, STDIN_FILENO);
+
+    /* cmd_start(peer, 0, )
+
+    argc = 3;
+    argv[1] = malloc(INET_ADDRSTRLEN);
+    sprintf(argv[1], "127.0.0.1");
+    argv[2] = malloc(5);
+    sprintf(argv[2], "4242"); */
+
+    argv2 = get_command_line("start 127.0.0.1 4242", &argc2);
+    cmd_start(&peer, argc2, argv2);
 
     for (;;)
     {
@@ -2715,3 +2768,10 @@ on FLOOD(data) from peer:
 
 
 */
+
+/* 
+test:
+
+
+
+ */

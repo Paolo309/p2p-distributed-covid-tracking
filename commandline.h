@@ -8,7 +8,8 @@
 
 #define MAX_CMD_LEN 128
 
-char **get_command_line(int *argc);
+char **get_command_line(const char* str, int *argc);
+char **scan_command_line(int *argc);
 void free_command_line(int argc, char **argv);
 
 #endif
