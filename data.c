@@ -321,9 +321,11 @@ void merge_entry_lists(EntryList *dest, EntryList *src, bool strict)
                     a->flags = b->flags;
                 }
             }
+
+            remove_entry(src, b);
             
             tmp = b->prev;
-            /* free(b); */
+            free(b);
             b = tmp;
             
             a = a->prev;
@@ -351,7 +353,7 @@ void merge_entry_lists(EntryList *dest, EntryList *src, bool strict)
             dest->last = b;
 
         dest->length++;
-        /* src->length--; */ /* TODO correct? */
+        src->length--; /* TODO correct? */
 
         b = tmp_prev;
     }
@@ -364,6 +366,7 @@ void merge_entry_lists(EntryList *dest, EntryList *src, bool strict)
     {
         /* keep updated the pointer to the fist entry in src */
         src->first = dest->first;
+        src->length = dest->length;
         /* dest head isn't new, so dest->first is already pointing to dest head */
         return;
     }
@@ -378,7 +381,8 @@ void merge_entry_lists(EntryList *dest, EntryList *src, bool strict)
         /* keep updated the pointer to the first entry in dest */
         dest->first = src->first;
 
-        dest->length += (src->length - dest->length);
+        dest->length += src->length;
+        src->length = dest->length;
     }
 }
 

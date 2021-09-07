@@ -2381,7 +2381,10 @@ void handle_add_entry(ThisPeer *peer, Message *msgp)
 
     printf("received new entries from peer %hd\n", msgp->id);
 
+    init_entry_list(&new_entries);
     deserialize_entries(msgp->body, &new_entries);
+
+    print_entries_asc(&new_entries, "NEW ENTRIES");
 
     merge_entry_lists(&peer->entries, &new_entries, COPY_STRICT);
 
