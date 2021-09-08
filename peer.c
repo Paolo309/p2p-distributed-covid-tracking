@@ -11,8 +11,8 @@
 #include "graph.h"
 
 /* comment out the defines below to use the real date */
-#define FAKE_DAY 24
-#define FAKE_MONTH 8
+#define FAKE_DAY 14
+#define FAKE_MONTH 9
 #define FAKE_YEAR 2021
 
 #define REG_CLOSING_HOUR 23
@@ -478,6 +478,7 @@ int search_needed_entries(ThisPeer *peer, EntryList *found, EntryList *not_found
 {
     Entry *found_entry;
     Entry *new_entry;
+    Entry *entry;
     time_t t_day;
     int count = 0;
 
@@ -485,7 +486,22 @@ int search_needed_entries(ThisPeer *peer, EntryList *found, EntryList *not_found
 
     if (start == BEGINNING_OF_TIME)
     {
-        start = peer->entries.first->timestamp;
+        if (is_entry_list_empty(&peer->entries))
+        {
+            start = str_to_time("2020:01:01");
+        }
+        else
+        {
+            /* set start to the value of the oldest timestamp, excluding BEGINNING_OF_TIME */
+
+            entry = peer->entries.first;
+            while (entry && entry->timestamp == BEGINNING_OF_TIME)
+                entry = entry->next;
+            
+            if (entry)
+                start = entry->timestamp;
+        }
+
     }
     
     /* for each day of the period */
@@ -2451,7 +2467,10 @@ void demux_user_input(ThisPeer *peer)
 
     argv = scan_command_line(&argc);
 
-    if (argc == 0) return;
+    if (argv == NULL || argc == 0) 
+    {
+        return;   
+    }
     
     for (i = 0; i < NUM_CMDS; i++)
     {

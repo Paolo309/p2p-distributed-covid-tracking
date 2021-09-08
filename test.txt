@@ -1,0 +1,110 @@
+2021:08:05 1 212 8
+2021:08:06 1 246 5
+2021:08:07 1 294 4
+2021:08:08 1 204 5
+2021:08:09 1 103 4
+2021:08:10 1 242 4
+2021:08:11 1 230 4
+2021:08:12 1 0 0
+2021:08:13 1 225 4
+
+
+PEER 10001
+
+---------------------------------------------
+IL PEER HA TUTTE LE ENTRI, MA SONO LOCALI
+
+get sum t 2021:09:08-2021:09:11
+
+OUTPUT:
+totale tamponi = 779
+
+AGGIUNTO AL REGISTER:
+2021:09:08 5 779 17 4
+
+
+---------------------------------------------
+IL PEER HA GIA` IL DATO AGGREGATO
+
+get sum t 2021:09:08-2021:09:11
+
+OUTPUT:
+totale tamponi = 779
+
+AGGIUNTO AL REGISTER:
+niente
+
+
+---------------------------------------------
+IL PEER HA TUTTE LE ENTRY E SONO GLOBALI
+
+get sum t 2021:09:07-2021:09:10
+
+OUTPUT:
+totale tamponi = 843
+
+AGGIUNTO AL REGISTER:
+2021:09:07-2021:09:10 5 843 20 4
+
+
+---------------------------------------------
+FINO AD OGGI: UNA ENTRY MANCA IN TUTTI I PEER
+
+get sum t 2021:09:09-*
+
+OUTPUT:
+totale tamponi = 800
+
+AGGIUNTO AL REGISTER:
+2021:09:09-2021:09:13 5 800 16 5
+2021:08:12 1 0 0
+
+
+---------------------------------------------
+DALL'INIZIO
+get sum t *-2021:09:09
+
+OUTPUT:
+totale tamponi = 1059
+
+AGGIUNTO AL REGISTER:
+1970:01:01-2021:09:08 5 1059 29 18879
+
+
+---------------------------------------------
+TOTALE COMPLESSIVO
+get sum t
+
+OUTPUT:
+totale tamponi = 1756
+
+AGGIUNTO AL REGISTER:
+1970:01:01-2021:09:12 5 1756 41 18883
+
+---------------------------------------------
+
+
+PEER 10002
+
+---------------------------------------------
+UN NEIGHBOR HA IL DATO AGGREGATO
+get sum t 2021:09:08-2021:09:11
+
+OUTPUT:
+totale tamponi = 779
+
+AGGIUNTO AL REGISTER:
+2021:09:08 5 779 17 4
+
+---------------------------------------------
+
+
+get sum t 2021:09:08-2021:09:11
+get sum t 2021:09:08-2021:09:11
+get sum t 2021:09:07-2021:09:10
+get sum t 2021:09:09-*
+get sum t *-2021:09:09
+get sum t
+
+
+get sum t 2021:09:08-2021:09:11
