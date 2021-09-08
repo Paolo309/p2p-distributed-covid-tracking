@@ -10,10 +10,10 @@
 #include "commandline.h"
 #include "graph.h"
 
-/* comment out the next two defines to user the real date */
-/* #define FAKE_DAY 28
-#define FAKE_MONTH 2
-#define FAKE_YEAR 2021 */
+/* comment out the defines below to use the real date */
+#define FAKE_DAY 24
+#define FAKE_MONTH 8
+#define FAKE_YEAR 2021
 
 #define REG_CLOSING_HOUR 23
 
@@ -21,6 +21,9 @@
 #define REQ_VARIAZIONE 1
 #define REQ_TAMPONI 2
 #define REQ_NUOVI_CASI 3
+
+/* dst hack: Italy's epoch 0 */
+#define BEGINNING_OF_TIME -3600
 
 time_t add_days(time_t time, int days)
 {
@@ -33,6 +36,35 @@ time_t add_days(time_t time, int days)
 int diff_days(time_t time1, time_t time0)
 {
     return difftime(time1, time0) / 86400;
+}
+
+time_t get_today_adjusted()
+{
+    time_t t_now;
+    struct tm* tm_now;
+
+    t_now = time(NULL);
+    tm_now = localtime(&t_now);
+
+    #ifdef FAKE_DAY
+    tm_now->tm_mday = FAKE_DAY;
+    #endif
+
+    #ifdef FAKE_MONTH
+    tm_now->tm_mon = FAKE_MONTH - 1;
+    #endif
+
+    #ifdef FAKE_YEAR
+    tm_now->tm_year = FAKE_YEAR - 1900;
+    #endif
+
+    if (tm_now->tm_hour >= REG_CLOSING_HOUR)
+        tm_now->tm_mday++;
+
+    tm_now->tm_hour = tm_now->tm_min = tm_now->tm_sec = 0;
+    tm_now->tm_isdst = -1;
+
+    return mktime(tm_now);
 }
 
 int validate_port(const char *str_port)
@@ -450,6 +482,11 @@ int search_needed_entries(ThisPeer *peer, EntryList *found, EntryList *not_found
     int count = 0;
 
     t_day = end;
+
+    if (start == BEGINNING_OF_TIME)
+    {
+        start = peer->entries.first->timestamp;
+    }
     
     /* for each day of the period */
     while (difftime(t_day, start) >= 0)
@@ -630,7 +667,7 @@ bool ask_aggr_to_neighbors_v2(ThisPeer *peer, EntryList *req_aggr, EntryList *re
         msg.body = allocate_entry_list_buffer(req_aggr->length);
         msg.body_len = serialize_entries(msg.body, req_aggr) - msg.body;
         
-        printf("asking aggr to %d\n", ntohs(nbr->peer->addr.sin_port));
+        printf("asking aggrv2 to %d\n", ntohs(nbr->peer->addr.sin_port));
 
         ret = send_message(sd, &msg); /* TODO sending entries */
         if (ret == -1)
@@ -1023,6 +1060,8 @@ void get_aggr_tot(ThisPeer *peer, time_t beg_period, time_t end_period, int type
     init_entry_list(&aggr_requested);
     entry = create_entry(beg_period, 0, 0, AGGREG_PERIOD | SCOPE_GLOBAL | TYPE_TOTAL, period_len);
     add_entry(&aggr_requested, entry);
+
+    print_entries_asc(&aggr_requested, "REQUESTED");
 
     data_found = ask_aggr_to_neighbors(peer, &aggr_requested);
     if (data_found)
@@ -1589,9 +1628,6 @@ int cmd_start(ThisPeer *peer, int argc, char **argv)
 
 int cmd_add(ThisPeer *peer, int argc, char **argv)
 {
-    time_t now;
-    struct tm *timeinfo;
-    /* char str_time[TIMESTAMP_STRLEN]; */
     Entry *tmp_entry;
     int32_t tmp_tamponi, tmp_ncasi;
 
@@ -1617,33 +1653,8 @@ int cmd_add(ThisPeer *peer, int argc, char **argv)
         return -1;
     }
 
-    time(&now);
-    timeinfo = localtime(&now);
-
-    /* COMMENTED OUT FOR TESTING */
-    if (timeinfo->tm_hour >= REG_CLOSING_HOUR)
-        timeinfo->tm_mday++;
-
-    #ifdef FAKE_DAY
-    timeinfo->tm_mday = FAKE_DAY;
-    #endif
-
-    #ifdef FAKE_MONTH
-    timeinfo->tm_mon = FAKE_MONTH - 1;
-    #endif
-
-    #ifdef FAKE_YEAR
-    timeinfo->tm_year = FAKE_YEAR - 1900;
-    #endif
-
-    timeinfo->tm_hour = timeinfo->tm_min = timeinfo->tm_sec = 0;
-    timeinfo->tm_isdst = -1;
-
-    /* TODO ugly: can directly pass time_t to create_entry */
-    /* strftime(str_time, TIMESTAMP_STRLEN, "%Y-%m-%d", timeinfo); */
-    
     tmp_entry = create_entry(
-        mktime(timeinfo), 
+        get_today_adjusted(), 
         tmp_tamponi, tmp_ncasi, 
         SCOPE_LOCAL | TYPE_TOTAL | AGGREG_DAILY, 
         0
@@ -1666,8 +1677,8 @@ int cmd_get(ThisPeer *peer, int argc, char **argv)
     char str_time[TIMESTAMP_STRLEN];
     int count;
     time_t period[2];
+    time_t now;
     int32_t flags;
-    struct tm *timeinfo;
     int aggr, type;
 
     if (argc < 3 || argc > 4)
@@ -1724,28 +1735,29 @@ int cmd_get(ThisPeer *peer, int argc, char **argv)
         }
     }
 
+    /* if after REG_CLOSING_HOUR, t_now is tomorrow */
+    now = get_today_adjusted();
+
+    if (period[0] == 0)
+    {
+        
+        /* tmp = localtime(&period[0]);
+            tmp->tm_hour--;
+        tmp->tm_isdst = -1;
+        period[0] = mktime(tmp);
+        printf("PERIOD 0 %d\n", period[0]); */
+        period[0] = BEGINNING_OF_TIME;
+    }
+
     /* repalcing end period to yesterday if it was set to "*" */
     if (period[1] == 0)
     {
-        period[1] = time(NULL);
-        timeinfo = localtime(&period[1]);
-
-        #ifdef FAKE_DAY
-        timeinfo->tm_mday = FAKE_DAY;
-        #endif
-
-        #ifdef FAKE_MONTH
-        timeinfo->tm_mon = FAKE_MONTH - 1;
-        #endif
-
-        #ifdef FAKE_YEAR
-        timeinfo->tm_year = FAKE_YEAR - 1900;
-        #endif
-
-        timeinfo->tm_mday--;
-        timeinfo->tm_hour = timeinfo->tm_min = timeinfo->tm_sec = 0;
-        timeinfo->tm_isdst = -1;
-        period[1] = mktime(timeinfo);
+        period[1] = add_days(now, -1);
+    }
+    else if (difftime(period[1], now) >= 0)
+    {
+        printf("invalid end period date\n");
+        return -1;
     }
     
     if (period[1] < period[0])
@@ -1753,7 +1765,6 @@ int cmd_get(ThisPeer *peer, int argc, char **argv)
         printf("invalid period\n");
         return -1;
     }
-
 
     if (strcmp(argv[1], ARG_AGGREG_SUM) == 0)
     {

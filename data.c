@@ -410,7 +410,8 @@ void add_entry(EntryList *entries, Entry *entry)
         /* add entry to list */
         entries->last = entries->first = entry;
         entry->next = entry->prev = NULL;
-        entries->length++;
+        entries->length = 1;
+        printf("this\n");
         return;
     }
     
@@ -507,7 +508,7 @@ void remove_entry(EntryList *entries, Entry *entry)
 void print_entry(Entry *entry) 
 {
     time_t tmp_end_period;
-    char str_time[TIMESTAMP_STRLEN];
+    char str_time[TIMESTAMP_STRLEN + 10];
 
     /* printf("<%ld> ", entry->timestamp); */
 
@@ -536,7 +537,7 @@ void print_entry(Entry *entry)
     if (entry->flags & SCOPE_GLOBAL)
         printf("GLOBALE");
     else
-        printf("LOCALE");
+        printf("LOCALE ");
 
     printf(" ");
 
@@ -557,7 +558,7 @@ void print_entries_asc(EntryList *list, const char* text)
 
     while (p)
     {
-        print_entry(p);        
+        print_entry(p);
         p = p->next;
         count++;
     }
