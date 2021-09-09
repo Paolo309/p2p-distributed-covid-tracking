@@ -218,6 +218,13 @@ void load_register_from_file(EntryList *entries, const char* file_name)
     
     fp = fopen(file_name, "r");
     
+    if (fp == NULL) 
+    {
+        printf("cannot open file %s\n", file_name);
+        printf("no entries loaded\n");
+        return;
+    }
+    
     tmp_entry = NULL;
 
     while (fscanf(fp, "%s %d %d %d", tmp_str_time, &flags, &tmp_tamponi, &tmp_ncasi) != EOF) {
@@ -240,6 +247,8 @@ void load_register_from_file(EntryList *entries, const char* file_name)
     entries->last = tmp_entry;
     
     fclose(fp);
+
+    printf("loaded %d entries\n", entries->length);
 }
 
 /**
@@ -411,7 +420,6 @@ void add_entry(EntryList *entries, Entry *entry)
         entries->last = entries->first = entry;
         entry->next = entry->prev = NULL;
         entries->length = 1;
-        printf("this\n");
         return;
     }
     
@@ -552,9 +560,19 @@ void print_entries_asc(EntryList *list, const char* text)
     int count = 0;
 
     if (text == NULL)
-        printf("==== %d entries ascending ====\n", list->length);
+        printf("\n==== %d entries ====", list->length);
     else
-        printf("==== %s (%d) ====\n", text, list->length);
+    {
+        printf("\n==== %s (%d) ====", text, list->length);
+    }
+
+    if (list->length == 0)
+    {
+        printf(" [empty list]\n");
+        return;
+    }
+
+    printf("\n");
 
     while (p)
     {
@@ -563,7 +581,7 @@ void print_entries_asc(EntryList *list, const char* text)
         count++;
     }
 
-    printf("====================\n");
+    printf("====================\n\n");
     
     if (count != list->length)
     {
@@ -579,9 +597,9 @@ void print_entries_dsc(EntryList *list, const char *text)
     int count = 0;
     
     if (text == NULL)
-        printf("==== %d entries ascending ====\n", list->length);
+        printf("\n==== %d entries DEscending ====\n", list->length);
     else
-        printf("==== %s (%d) ====\n", text, list->length);
+        printf("\n==== %s (%d) ====\n", text, list->length);
 
     while (p)
     {
@@ -590,7 +608,7 @@ void print_entries_dsc(EntryList *list, const char *text)
         count++;
     }
 
-    printf("====================\n");
+    printf("====================\n\n");
 
     if (count != list->length)
     {

@@ -17,6 +17,11 @@
 #define REQ_TAMPONI 2
 #define REQ_NUOVI_CASI 3
 
+#define ARG_TYPE_TAMPONI "t"
+#define ARG_TYPE_NCASI "c"
+#define ARG_AGGREG_SUM "sum"
+#define ARG_AGGREG_VAR "var"
+
 #define STATE_OFF 0
 #define STATE_STARTING 1
 #define STATE_STARTED 2
