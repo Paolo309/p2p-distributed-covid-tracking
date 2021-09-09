@@ -110,3 +110,21 @@ in_port_t get_peer_port(Message *msgp, int n)
 {
     return *((in_port_t*)msgp->body + n);
 }
+
+void add_desc(fd_set *fdsetp, int *fdmax, int fd)
+{
+    FD_SET(fd, fdsetp);
+    if (fdmax != NULL && fd > *fdmax)
+        *fdmax = fd;
+}
+
+void remove_desc(fd_set *fdsetp, int *fdmax, int fd)
+{
+    FD_CLR(fd, fdsetp);
+    
+    if (fdmax != NULL && fd == *fdmax)
+    {
+        while (FD_ISSET(*fdmax, fdsetp) == false && *fdmax >= 0)
+            *fdmax -= 1;
+    }
+}

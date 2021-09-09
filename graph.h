@@ -11,7 +11,6 @@
 
 typedef struct Peer {
     struct sockaddr_in addr;
-    struct sockaddr_in comm_addr;
     struct GraphNode *node;
 } Peer;
 
@@ -34,10 +33,11 @@ GraphNode *create_node(Peer *peer, GraphNode *next);
 Graph *create_graph(Graph *graph);
 void free_graph(Graph *graph);
 
-bool addr_equals(struct sockaddr_in *a, struct sockaddr_in *b);
-bool peer_equals(Peer *a, Peer *b);
+bool cmp_addrs(struct sockaddr_in *a, struct sockaddr_in *b);
+bool cmp_peers(Peer *a, Peer *b);
 
 GraphNode *search_peer_node_by_addr(GraphNode *nodes, struct sockaddr_in *addr, GraphNode **prec);
+GraphNode *search_peer_node_by_port(GraphNode *nodes, in_port_t port);
 
 Peer *add_peer(Graph *graph, struct sockaddr_in *addr);
 

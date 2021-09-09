@@ -84,10 +84,10 @@ void free_graph(Graph *graph)
  * @param b 
  * @return true if a and b have same address and port
  */
-bool addr_equals(struct sockaddr_in *a, struct sockaddr_in *b)
+bool cmp_addrs(struct sockaddr_in *a, struct sockaddr_in *b)
 {
-    return a->sin_port == b->sin_port &&
-           a->sin_addr.s_addr == b->sin_addr.s_addr;
+    return a->sin_port == b->sin_port; /* &&
+           a->sin_addr.s_addr == b->sin_addr.s_addr; */
 }
 
 /**
@@ -97,10 +97,10 @@ bool addr_equals(struct sockaddr_in *a, struct sockaddr_in *b)
  * @param b 
  * @return true if a and b have same address and port
  */
-bool peer_equals(Peer *a, Peer *b)
+bool cmp_peers(Peer *a, Peer *b)
 {
     if (a == NULL || b == NULL) return false;
-    return addr_equals(&a->addr, &b->addr);
+    return cmp_addrs(&a->addr, &b->addr);
 }
 
 /**
@@ -119,13 +119,21 @@ GraphNode *search_peer_node_by_addr(GraphNode *nodes, struct sockaddr_in *addr, 
     if (nodes == NULL)
         return NULL;
 
-    if (addr_equals(&nodes->peer->addr, addr))
+    if (cmp_addrs(&nodes->peer->addr, addr))
         return nodes;
 
     if (prec != NULL)
         *prec = nodes;
 
     return search_peer_node_by_addr(nodes->next, addr, prec);
+}
+
+GraphNode *search_peer_node_by_port(GraphNode *nodes, in_port_t port)
+{
+    struct sockaddr_in tmp_addr;
+    memset(&tmp_addr, 0, sizeof(tmp_addr));
+    tmp_addr.sin_port = htons(port);
+    return search_peer_node_by_addr(nodes, &tmp_addr, NULL);
 }
 
 
@@ -181,7 +189,7 @@ void add_neighbor_back(GraphNode **nbr_list, Peer *peer, GraphNode *parent) /* M
         return;
     }
 
-    if (peer_equals((*nbr_list)->peer, peer))
+    if (cmp_peers((*nbr_list)->peer, peer))
         return;
 
     add_neighbor_back(&(*nbr_list)->next, peer, parent);
@@ -265,7 +273,7 @@ void remove_neighbor(GraphNode *node, Peer *peer)
 }
 
 /**
- * Remove peer from the list of peers.
+ * Remove peer and its neighbors from the list of peers.
  * 
  * @param nodes list of peers
  * @param peer peer to remove
@@ -306,7 +314,7 @@ GraphNode *remove_peer(Graph *nodes, struct sockaddr_in *addr)
 
     nbr = node->neighbors;
 
-    free(node);
+    /* free(node); */
 
     return nbr;
 }

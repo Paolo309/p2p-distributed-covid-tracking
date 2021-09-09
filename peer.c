@@ -77,24 +77,6 @@ void init_peer(ThisPeer *peer, int host_port)
     create_graph(&peer->neighbors);
 }
 
-void add_desc(fd_set *fdsetp, int *fdmax, int fd)
-{
-    FD_SET(fd, fdsetp);
-    if (fdmax != NULL && fd > *fdmax)
-        *fdmax = fd;
-}
-
-void remove_desc(fd_set *fdsetp, int *fdmax, int fd)
-{
-    FD_CLR(fd, fdsetp);
-    
-    if (fdmax != NULL && fd == *fdmax)
-    {
-        while (FD_ISSET(*fdmax, fdsetp) == false && *fdmax >= 0)
-            *fdmax -= 1;
-    }
-}
-
 void set_timeout(ThisPeer *peer, int seconds)
 {
     peer->timeout.tv_sec = seconds;
@@ -996,7 +978,7 @@ void get_aggr_var(ThisPeer *peer, time_t beg_period, time_t end_period, int type
     int32_t flags, act_end_period;
     
     /* used to search entries and compute aggregations */
-    EntryList found_var_entries, found_tot_entries;
+    EntryList found_var_entries, found_var_entries_nbrs, found_tot_entries;
     int missing_entries = 0;
     EntryList entries_res; /* result of the aggregation */
 
@@ -1127,15 +1109,17 @@ void get_aggr_var(ThisPeer *peer, time_t beg_period, time_t end_period, int type
     |  asking aggregate to neighbors
     *---------------------------------------------*/ 
 
-    free_entry_list(&found_var_entries);
+    /* free_entry_list(&found_var_entries); */
 
-    init_entry_list(&found_var_entries);
+    init_entry_list(&found_var_entries_nbrs);
     
-    all_data_found = ask_aggr_to_neighbors(peer, &not_found_var_entries, &found_var_entries);
+    all_data_found = ask_aggr_to_neighbors(peer, &not_found_var_entries, &found_var_entries_nbrs);
 
     if (all_data_found)
     {
         printf("[GET VAR] the neighbors have all the requested variations:\n");
+
+        merge_entry_lists(&found_var_entries, &found_var_entries_nbrs, COPY_STRICT);
 
         show_aggr_var_result(&found_var_entries, type);
 
@@ -1151,11 +1135,13 @@ void get_aggr_var(ThisPeer *peer, time_t beg_period, time_t end_period, int type
         return;
     }
 
+    free_entry_list(&found_var_entries); 
+
     printf("[GET VAR] some variation is still missing\n");
     print_entries_asc(&not_found_var_entries, "variations missing");
 
     /* add the aggr entries found to the local register */
-    merge_entry_lists(&peer->entries, &found_var_entries, COPY_STRICT);
+    merge_entry_lists(&peer->entries, &found_var_entries_nbrs, COPY_STRICT);
 
     printf("[GET VAR] totals needed to compute the missing variations:\n");
     print_entries_asc(&not_found_tot_entries, NULL);
@@ -1685,9 +1671,6 @@ int cmd_get(ThisPeer *peer, int argc, char **argv)
 
 int cmd_stop(ThisPeer *peer, int argc, char **argv)
 {
-    Message msg;
-    int ret;
-
     if (peer->state == STATE_OFF)
     {
         printf("peer not started\n");
@@ -1698,18 +1681,6 @@ int cmd_stop(ThisPeer *peer, int argc, char **argv)
     {
         printf("cannot stop peer now\n");
         return 0;
-    }
-
-    msg.type = MSG_STOP;
-    msg.body_len = 0;
-    msg.body = NULL;
-
-    ret = send_message(peer->dserver, &msg);
-
-    if (ret <= 0)
-    {
-        printf("could not send stop message to discovery server\n");
-        return -1;
     }
 
     return send_stop_msg_to_dserver(peer);
@@ -1739,12 +1710,25 @@ int cmd_load(ThisPeer* peer, int argc, char** argv)
     return 0;
 }
 
-#define NUM_CMDS 6
+int cmd_help(ThisPeer *peer, int argc, char **argv)
+{
+    printf("1) start <address> <port> --> richiede al DS la connessione al network\n");
+    printf("2) add <type> <quantity> --> aggiunge una nuova entry\n");
+    printf("3) get <aggr> <type> <period> --> esegue la query specificata\n");
+    printf("4) stop --> chiude il DSDettaglio comandi\n");
+    printf("5) reg --> mostra le entry nel register\n");
+    printf("6) load <file> --> carica entry da un file\n");
+    printf("7) help --> mostra i dettagli dei comandi\n");
 
-char *cmd_str[NUM_CMDS] = { "start", "add", "get", "stop", "reg", "load" };
+    return 0;
+}
+
+#define NUM_CMDS 7
+
+char *cmd_str[NUM_CMDS] = { "start", "add", "get", "stop", "reg", "load", "help" };
 
 int (*cmd_func[NUM_CMDS])(ThisPeer*, int, char**) = 
-    { &cmd_start, &cmd_add, &cmd_get, &cmd_stop, &cmd_reg, &cmd_load };
+    { &cmd_start, &cmd_add, &cmd_get, &cmd_stop, &cmd_reg, &cmd_load, &cmd_help };
 
 
 
@@ -1822,7 +1806,10 @@ void handle_stop_response(ThisPeer *peer, Message *msgp)
     int req_num;
     FloodRequest *request;
 
-    if (msgp->type == MSG_STOP && peer->state == STATE_STOPPING)
+    if (msgp->type != MSG_STOP)
+        return;
+
+    if (peer->state == STATE_STOPPING)
     {
         print_entries_asc(&peer->entries, "[STOP] sending this entries to neighbors");
 
@@ -1834,7 +1821,12 @@ void handle_stop_response(ThisPeer *peer, Message *msgp)
         request->nbrs_remaining = connect_to_neighbors(peer, request, 0);
 
         peer->state = STATE_STOPPED;
-        return;
+    }
+    else if (peer->state == STATE_STARTED)
+    {
+        printf("[STOP] server stopped\n");
+        /* TODO free/close everything */
+        exit(EXIT_SUCCESS);
     }
 }
 
@@ -2255,18 +2247,38 @@ void handle_flood_response(ThisPeer *peer, Message *msgp, int sd)
 /* called when a socket conencted to a peer is ready to be written during stop */
 void do_share_register(ThisPeer *peer, int sd)
 {
+    EntryList shared_entries;
+    Entry *entry, *next_entry;
     Message msg;
-    int ret;
+    int how_many, ret;
 
     FloodRequest *request = get_request_by_sd(peer, sd);
     
     printf("[SHARE] sending entries to neighbors (sd: %d)\n", sd);
 
+    /* divide register in equal parts among neighbors */
+    how_many = peer->entries.length / request->nbrs_remaining;
+
+    init_entry_list(&shared_entries);
+    
+    entry = peer->entries.first;
+    while (entry && how_many > 0)
+    {
+        next_entry = entry->next;
+        
+        remove_entry(&peer->entries, entry);
+        entry->next = entry->prev = NULL;
+        add_entry(&shared_entries, entry);
+
+        how_many--;
+        entry = next_entry;
+    }
+
     msg.type = MSG_ADD_ENTRY;
     msg.id = get_peer_id(peer);
-    msg.body = allocate_entry_list_buffer(peer->entries.length);
-    is_entry_list_empty(&peer->entries);
-    msg.body_len = serialize_entries(msg.body, &peer->entries) - msg.body;
+    msg.body = allocate_entry_list_buffer(shared_entries.length);
+    is_entry_list_empty(&shared_entries);
+    msg.body_len = serialize_entries(msg.body, &shared_entries) - msg.body;
 
     ret = send_message(sd, &msg); /* sending entries */
     if (ret == -1)
@@ -2278,6 +2290,8 @@ void do_share_register(ThisPeer *peer, int sd)
     close(sd);
     remove_desc(&peer->master_write_set, &peer->fdmax_w, sd);
 
+    free_entry_list(&shared_entries);
+
     request->nbrs_remaining--;
 
     if (request->nbrs_remaining == 0) 
@@ -2285,7 +2299,7 @@ void do_share_register(ThisPeer *peer, int sd)
         printf("[SHARE] entries sent to all neighbors\nstopped\n");
         peer->state = STATE_OFF;
 
-        /* TODO reset peer state so that start can be called again */
+        /* TODO reset peer state so that start can be called again or close/free everything and exit*/
 
         enable_user_input(peer);
         clear_timeout(peer);
@@ -2312,7 +2326,11 @@ void handle_add_entry(ThisPeer *peer, Message *msgp)
 }
 
 
-/* ########## DEMULTIPLEXING ########## */
+
+/*----------------------------------------------
+ |  I/O DEMULTIPLEXING
+ *---------------------------------------------*/
+
 
 void demux_user_input(ThisPeer *peer)
 {
@@ -2477,7 +2495,7 @@ int main(int argc, char** argv)
     if (ret == -1) 
         exit(EXIT_FAILURE);
 
-    printf("PEER %d\n", ret);
+    printf("*********** PEER %d ***********\n", ret);
 
     init_peer(&peer, ret);
 
@@ -2505,7 +2523,7 @@ int main(int argc, char** argv)
 
         if (is_user_input_enabled(&peer))
         {
-            printf("peer@%d$ ", ntohs(peer.addr.sin_port));
+            printf("peer@%d >>> ", ntohs(peer.addr.sin_port));
             fflush(stdout);
         }
 
