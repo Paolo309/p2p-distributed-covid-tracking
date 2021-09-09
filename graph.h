@@ -32,6 +32,7 @@ typedef struct Graph
 Peer *create_peer(struct sockaddr_in *addr);
 GraphNode *create_node(Peer *peer, GraphNode *next);
 Graph *create_graph(Graph *graph);
+void free_graph(Graph *graph);
 
 bool addr_equals(struct sockaddr_in *a, struct sockaddr_in *b);
 bool peer_equals(Peer *a, Peer *b);

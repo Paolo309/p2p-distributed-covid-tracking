@@ -452,6 +452,7 @@ void add_entry(EntryList *entries, Entry *entry)
                     p->flags = entry->flags;
                 }
             }
+            free(entry);
             return;
         }
         

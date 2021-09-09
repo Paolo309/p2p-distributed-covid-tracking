@@ -55,6 +55,28 @@ Graph *create_graph(Graph *graph)
     return graph;
 }
 
+void free_graph(Graph *graph)
+{
+    GraphNode *node, *nbr, *next_node, *next_nbr;
+
+    node = graph->first;
+    while (node)
+    {
+        next_node = node->next;
+
+        nbr = node->neighbors;
+        while (nbr)
+        {
+            next_nbr = nbr->next;
+            free(nbr);
+            nbr = next_nbr;
+        }
+
+        free(node);
+        node = next_node;
+    }
+}
+
 /**
  * @brief Compare two struct sockaddr_in.
  * 
