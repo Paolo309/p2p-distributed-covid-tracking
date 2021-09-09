@@ -2198,7 +2198,7 @@ void handle_flood_response(ThisPeer *peer, Message *msgp, int sd)
 
             num_of_peers = get_num_of_peers(request->response_msg);
 
-            printf("[FLOOD RSP] %d peers have entries for me:\n", num_of_peers);
+            printf("\n[FLOOD RSP] %d peers have entries for me:\n", num_of_peers);
 
             /* deserializing received peers addresses */
             while (num_of_peers > 0)
@@ -2485,13 +2485,13 @@ int main(int argc, char** argv)
 
     add_desc(&peer.master_read_set, &peer.fdmax_r, STDIN_FILENO);
 
-    argv2 = get_command_line("start 127.0.0.1 4242", &argc2);
-    cmd_start(&peer, argc2, argv2);
-    free_command_line(argc, argv2);
-    
-    sprintf(str_cmd, "load reg%c.in", argv[1][4]);
+    sprintf(str_cmd, "load reg%c.in", argv[1][strlen(argv[1]) - 1]);
     argv2 = get_command_line(str_cmd, &argc2);
     cmd_load(&peer, argc2, argv2);
+    free_command_line(argc, argv2);
+
+    argv2 = get_command_line("start 127.0.0.1 4242", &argc2);
+    cmd_start(&peer, argc2, argv2);
     free_command_line(argc, argv2);
 
     for (;;)
