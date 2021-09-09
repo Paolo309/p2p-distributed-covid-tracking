@@ -534,7 +534,17 @@ int connect_to_neighbors(ThisPeer *peer, FloodRequest *request, in_port_t except
     return count_connected;
 }
 
-bool ask_aggr_to_neighbors_v2(ThisPeer *peer, EntryList *req_aggr, EntryList *recvd_aggr)
+/**
+ * Ask the aggregates in teq_aggr to this peer's neighbors.
+ * The aggregates that are found are removed from req_aggr
+ * and place in recvd_aggr.
+ * 
+ * @param peer 
+ * @param req_aggr 
+ * @param recvd_aggr 
+ * @return true if at least one aggregate was found
+ */
+bool ask_aggr_to_neighbors(ThisPeer *peer, EntryList *req_aggr, EntryList *recvd_aggr)
 {
     EntryList data_received;
     Entry *entry, *found_entry;
@@ -567,7 +577,7 @@ bool ask_aggr_to_neighbors_v2(ThisPeer *peer, EntryList *req_aggr, EntryList *re
         msg.body = allocate_entry_list_buffer(req_aggr->length);
         msg.body_len = serialize_entries(msg.body, req_aggr) - msg.body;
         
-        printf("asking aggrv2 to %d\n", ntohs(nbr->peer->addr.sin_port));
+        printf("asking aggregates to %d\n", ntohs(nbr->peer->addr.sin_port));
 
         ret = send_message(sd, &msg);
         if (ret == -1)
@@ -609,7 +619,7 @@ bool ask_aggr_to_neighbors_v2(ThisPeer *peer, EntryList *req_aggr, EntryList *re
                 if (found_entry != NULL)
                 {
                     remove_entry(req_aggr, found_entry);
-                    /* free(found_entry); */ /* TODO needed? */
+                    free(found_entry); /* TODO needed? */
                 }
                 
                 entry = entry->prev;
@@ -617,80 +627,6 @@ bool ask_aggr_to_neighbors_v2(ThisPeer *peer, EntryList *req_aggr, EntryList *re
 
             if (is_entry_list_empty(req_aggr))
                 return true;
-        }
-        
-        nbr = nbr->next;
-    }
-
-    return false;
-}
-
-/* TODO can it be removed? */
-bool ask_aggr_to_neighbors(ThisPeer *peer, EntryList *req_aggr)
-{
-    EntryList data_received;
-    socklen_t slen;
-    GraphNode *nbr;
-    Message msg;
-    int ret, sd;
-    
-    slen = sizeof(struct sockaddr_in);
-
-    nbr = peer->neighbors.first;
-    while (nbr)
-    {
-        sd = socket(AF_INET, SOCK_STREAM, 0);
-        if (sd == -1)
-        {
-            perror("socket error");
-            return false;
-        }
-
-        ret = connect(sd, (struct sockaddr *)&nbr->peer->addr, slen);
-        if (ret == -1)
-        {
-            perror("connect error");
-            printf("cannot connect to neighbor %hd\n", ntohs(nbr->peer->addr.sin_port));
-            exit(EXIT_FAILURE);
-            return false;
-        }
-
-        msg.type = MSG_REQ_DATA;
-        msg.id = get_peer_id(peer);
-        msg.body = allocate_entry_list_buffer(req_aggr->length);
-        msg.body_len = serialize_entries(msg.body, req_aggr) - msg.body;
-        
-        printf("asking aggr to %d\n", ntohs(nbr->peer->addr.sin_port));
-
-        ret = send_message(sd, &msg);
-        if (ret == -1)
-        {
-            printf("could not send REQ_DATA to peer %d\n", ntohs(nbr->peer->addr.sin_port));
-            free(msg.body);
-            return false;
-        }
-
-        free(msg.body);
-
-        ret = recv_message(sd, &msg);
-        if (ret == -1)
-        {
-            printf("error while receiving REPLY_DATA\n");
-            return false;
-        }
-
-        close(sd);
-
-        /* TODO check message type? */
-        
-        init_entry_list(&data_received);
-        deserialize_entries(msg.body, &data_received);
-
-        if (!is_entry_list_empty(&data_received))
-        {
-            printf("aggregate found in neighbor %d\n", msg.id);
-            merge_entry_lists(req_aggr, &data_received, COPY_SHALLOW);
-            return true;
         }
         
         nbr = nbr->next;
@@ -858,7 +794,7 @@ void get_aggr_tot(ThisPeer *peer, time_t beg_period, time_t end_period, int type
     Entry *entry;
     
     /* used to search entries and compute aggregations */
-    EntryList found_entries, not_found_entries;
+    EntryList found_entries, not_found_entries, found_aggr;
     int missing_entries = 0;
     Entry *entry_res; /* result of the aggregation */
     
@@ -964,20 +900,22 @@ void get_aggr_tot(ThisPeer *peer, time_t beg_period, time_t end_period, int type
 
     print_entries_asc(&aggr_requested, "REQUESTED");
 
-    data_found = ask_aggr_to_neighbors(peer, &aggr_requested);
+    init_entry_list(&found_aggr);
+
+    data_found = ask_aggr_to_neighbors(peer, &aggr_requested, &found_aggr);
     if (data_found)
     {
         printf("[GET_SUM] a neighbor has the requested sum\n");
-        show_aggr_tot_result(aggr_requested.first, type);
+        show_aggr_tot_result(found_aggr.first, type);
 
         /* add the found entry to the local register */
-        add_entry(&peer->entries, aggr_requested.first);
+        add_entry(&peer->entries, found_aggr.first);
         printf("[GET_SUM] register updated\n");
         /* print_entries_asc(&peer->entries, "REGISTER"); */
 
         free_entry_list(&found_entries);
         free_entry_list(&not_found_entries);
-        free_entry_list(&aggr_requested);
+        free_entry_list(&found_aggr);
 
         return;
     }
@@ -985,6 +923,7 @@ void get_aggr_tot(ThisPeer *peer, time_t beg_period, time_t end_period, int type
     printf("[GET_SUM] no neighbor has the requested sum\n");
 
     free_entry_list(&aggr_requested);
+    free_entry_list(&found_aggr);
 
 
     /*----------------------------------------------
@@ -1196,7 +1135,7 @@ void get_aggr_var(ThisPeer *peer, time_t beg_period, time_t end_period, int type
 
     init_entry_list(&found_var_entries);
     
-    all_data_found = ask_aggr_to_neighbors_v2(peer, &not_found_var_entries, &found_var_entries);
+    all_data_found = ask_aggr_to_neighbors(peer, &not_found_var_entries, &found_var_entries);
 
     if (all_data_found)
     {
