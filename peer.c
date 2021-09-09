@@ -348,7 +348,7 @@ void compute_aggr_var(ThisPeer *peer, EntryList *entries, EntryList *entries_res
  * @param not_found 
  * @param start 
  * @param end 
- * @param flags flags used to search 
+ * @param flags flags used for searching, and put in create entries 
  * @param scope either SCOPE_LOCAL or SCOPE_GLOBAL
  * @return number of entries not found
  */
@@ -619,7 +619,7 @@ bool ask_aggr_to_neighbors(ThisPeer *peer, EntryList *req_aggr, EntryList *recvd
                 if (found_entry != NULL)
                 {
                     remove_entry(req_aggr, found_entry);
-                    free(found_entry); /* TODO needed? */
+                    free(found_entry);
                 }
                 
                 entry = entry->prev;
@@ -813,14 +813,10 @@ void get_aggr_tot(ThisPeer *peer, time_t beg_period, time_t end_period, int type
 
     /* flags that the entry we're looking for must have:
         AGGREG_PERIOD : we're looking for an entry that covers a period
-        SCOPE_GLOBAL  : the value of the entry must be common to all peers
-        TYPE_TOTAL    : we're looking for a sum, not a variation */
-    flags = AGGREG_PERIOD | SCOPE_GLOBAL | TYPE_TOTAL;
+        TYPE_TOTAL    : we're looking for a sum, not a variation
+        SCOPE_GLOBAL  : the value of the entry must be common to all peers */
+    flags = AGGREG_PERIOD | TYPE_TOTAL | SCOPE_GLOBAL;
 
-    /* period_len = period length in seconds / seconds in a day
-       does not account for leap seconds
-       includes the first and last days of the period, hence the +1 */
-    /* period_len = (int)difftime(end_period, beg_period) / 86400 + 1; */
     period_len = diff_days(end_period, beg_period) + 1;
 
     entry = search_entry(peer->entries.last, beg_period, flags, period_len);
@@ -842,9 +838,9 @@ void get_aggr_tot(ThisPeer *peer, time_t beg_period, time_t end_period, int type
 
     /* flags that the entries used to query peers must have:
         AGGREG_DAILY : because we're looking for daily totals 
-        SCOPE_LOCAL  : because search for local entries also also returns globals */
-    /* TODO why SCOPE_LOCAL? search only returns GLOBALS */
-    flags = AGGREG_DAILY | SCOPE_LOCAL | TYPE_TOTAL;
+        TYPE_TOTAL   : we're looking for a sum, not a variation
+        SCOPE_LOCAL  : the enties in not_found_entries cannot be global */
+    flags = AGGREG_DAILY | TYPE_TOTAL | SCOPE_LOCAL;
     
     init_entry_list(&found_entries);
     init_entry_list(&not_found_entries);
@@ -876,6 +872,7 @@ void get_aggr_tot(ThisPeer *peer, time_t beg_period, time_t end_period, int type
 
         /* add the found entry to the local register */
         add_entry(&peer->entries, entry_res);
+
         printf("[GET_SUM] register updated\n");
         /* print_entries_asc(&peer->entries); */
 
@@ -1066,9 +1063,8 @@ void get_aggr_var(ThisPeer *peer, time_t beg_period, time_t end_period, int type
 
     /* flags that the entries used to query peers must have:
         AGGREG_DAILY : because we're looking for daily totals 
-        SCOPE_LOCAL  : because search for local entries also also returns globals 
+        SCOPE_LOCAL  : not found entries cannot be global 
         TYPE_TOTAL   : we want daily totals to compute daily variations */
-    /* TODO why SCOPE_LOCAL? search only returns GLOBALS */
     flags = AGGREG_DAILY | SCOPE_LOCAL | TYPE_TOTAL;
 
     init_entry_list(&found_tot_entries);
@@ -1343,55 +1339,60 @@ void finalize_get_aggr_var(ThisPeer *peer, in_port_t peers[], int n, int req_num
         assumed that their values are zero and are created and added to this
         peer's register */
 
-    flags = AGGREG_PERIOD | SCOPE_GLOBAL | TYPE_VARIATION;
+    flags = AGGREG_PERIOD | SCOPE_LOCAL | TYPE_VARIATION;
 
     init_entry_list(&found_var_entries);
     init_entry_list(&not_found_var_entries);
 
-    /* fill not_found_var_entries to remove entries in  not_found_tot_entries
+    /* fill not_found_var_entries to remove entries in not_found_tot_entries
         that are not needed to compute the missing variations */
     search_needed_entries(
         peer, 
         &found_var_entries, &not_found_var_entries, 
         request->beg_period, request->end_period, 2,
         flags,
-        -1 /* TODO correct here */
+        SCOPE_GLOBAL /* TODO correct here */
     );
 
-    flags = AGGREG_DAILY | SCOPE_LOCAL | TYPE_TOTAL;
+    /* setting not found entries to SCOPE_GLOBAL because those entries
+        are definetively missing in all peers */
+    flags = AGGREG_DAILY | SCOPE_GLOBAL | TYPE_TOTAL;
     
     init_entry_list(&found_tot_entries);
     init_entry_list(&not_found_tot_entries);
 
+    /* find the totals needed to compute the variaton.
+       An entry may be local if it's present only in this peer:
+        in this case, that entry is set to SCOPE_GLOBAL an put
+        in found_tot_entries. */
     missing_entries = search_needed_entries(
         peer, 
         &found_tot_entries, &not_found_tot_entries, 
         request->beg_period, request->end_period, 0,
         flags,
-        -1
+        SCOPE_LOCAL
     );
 
+    /* remove the totals not actually needed to compute the remaining variations */
     missing_entries -= remove_not_needed_totals(
         &not_found_tot_entries,
         &not_found_var_entries
     );
 
+    /* create the totals that were not received */
     if (missing_entries != 0)
     {
         print_entries_asc(&not_found_tot_entries, "entries still missing");
         printf("[GET VAR FIN] creating missing entries\n");
 
-        entry = not_found_tot_entries.first;
-        while (entry)
-        {
-            entry->flags |= SCOPE_GLOBAL;
-            /* TODO can do merge() after loop? */
-            add_entry(&peer->entries, copy_entry(entry));
-            add_entry(&found_tot_entries, copy_entry(entry));
-            entry = entry->next;
-        }
+        merge_entry_lists(&found_tot_entries, &not_found_tot_entries, COPY_STRICT);
     }
 
+    /* there are now entires in this peer that have SCOPE_LOCAL because:
+        1. they existed has SCOPE_LOCAL, and now their value has been
+            updated to the global value using other peer's local values
+        2. they did not exist, but have been retrieved from peers al local values
+       those entries need to be set as SCOPE_GLOBAL */
     entry = found_tot_entries.first;
     while (entry)
     {
@@ -1404,7 +1405,6 @@ void finalize_get_aggr_var(ThisPeer *peer, in_port_t peers[], int n, int req_num
     printf("[GET VAR FIN] register updated\n");
     /* print_entries_asc(&peer->entries, "REGISTER"); */
 
-    free_entry_list(&not_found_tot_entries);
     free_entry_list(&found_var_entries);
     free_entry_list(&found_var_entries);
     free_entry_list(request->required_entries);
