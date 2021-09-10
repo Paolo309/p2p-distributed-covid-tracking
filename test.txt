@@ -8,6 +8,13 @@
 2021:08:12 1 0 0
 2021:08:13 1 225 4
 
+get sum t 2021:09:08-2021:09:11
+get sum t 2021:09:07-2021:09:10
+get sum t 2021:09:09-*
+get sum t *-2021:09:09
+get sum t
+get var c
+
 
 ---------------------------------------------
 IL PEER HA TUTTE LE ENTRI, MA SONO LOCALI

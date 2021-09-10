@@ -10,14 +10,14 @@
 time_t str_to_time(const char *str)
 {
     char *p;
-    struct tm time = { 0 };
+    struct tm time_tm = { 0 };
 
-    p = strptime(str, "%Y:%m:%d", &time);
+    p = strptime(str, "%Y:%m:%d", &time_tm);
     if (p != &str[TIMESTAMP_STRLEN - 1])
         return -1;
 
-    time.tm_isdst = -1;
-    return mktime(&time);
+    time_tm.tm_isdst = -1;
+    return mktime(&time_tm);
 }
 
 /**
@@ -26,20 +26,21 @@ time_t str_to_time(const char *str)
  * @param str where to write the string
  * @param time
  */
-void time_to_str(char *str, time_t *time)
+void time_to_str(char *str, time_t *timep)
 {
-    int w;
     struct tm *timeinfo;
-    timeinfo = localtime(time);
-
-    w = strftime(str, TIMESTAMP_STRLEN, "%Y:%m:%d", timeinfo);
+    /* printf("\nPRINT: %ld\n", *timep); */
+    timeinfo = localtime(timep);
+    
+    timeinfo->tm_isdst = -1;
+    
+    strftime(str, TIMESTAMP_STRLEN, "%Y:%m:%d", timeinfo);
 
     /* making sure the time is correctly set */
     if (timeinfo->tm_hour || timeinfo->tm_min || timeinfo->tm_sec)
-        sprintf(
-            str + w, 
-            "{ERR %d:%d:%d}", 
-            timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec
+        printf(
+            "\n{ERR %s -> %d:%d:%d}\n", 
+            str, timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec
         );
 }
 
@@ -381,7 +382,7 @@ void merge_entry_lists(EntryList *dest, EntryList *src, bool strict)
         /* keep updated the pointer to the fist entry in src */
         src->first = dest->first;
         src->length = dest->length;
-        /* dest head isn't new, so dest->first is already pointing to dest head */
+        /* dest head isn't new, so dest->first is already pointing to dest head */     
         return;
     }
     
@@ -460,7 +461,6 @@ void add_entry(EntryList *entries, Entry *entry)
         if (cmp_res < 0)
         {
             /* append `entry` after `p` */
-            
             succ = p->next;
             p->next = entry;
             
@@ -688,7 +688,7 @@ char *deserialize_entries(char *src, EntryList *list)
     {
         entry = create_entry_empty();
 
-        entry->timestamp = ntohl(*(time_t*)src);
+        entry->timestamp = (int)ntohl(*(time_t*)src);
         src += sizeof(time_t);
 
         entry->flags      = ntohl(*((int32_t*)src + 0));
@@ -709,6 +709,9 @@ char *deserialize_entries(char *src, EntryList *list)
         count--;
         prec = entry;
     }
+
+    if (list->first != NULL)
+        printf("fin des %ld\n", list->first->timestamp);
 
     list->last = entry;
 
