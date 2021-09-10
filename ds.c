@@ -194,12 +194,28 @@ void peer_started(Graph *peers, int sd, struct sockaddr_in *client_addr)
     }
 }
 
+void send_stop_ack(int sd, struct sockaddr_in *client_addr)
+{
+    Message msg;
+    int ret;
+
+    printf("sending ACK to stopped peer\n");
+
+    msg.type = MSG_STOP;
+    msg.body_len = 0;
+    msg.body = NULL;
+
+    ret = send_message_to(sd, &msg, client_addr);
+    if (ret == -1)
+    {
+        printf("could not send acknowledgement to stopped peer\n");
+    }
+}
+
 /* remove the stopped peer mantaining a circular structure */
 void peer_stopped(Graph *peers, int sd, struct sockaddr_in *client_addr, bool send_ack)
 {
-    int ret;
     GraphNode *neighbors, *prec_node, *next_node, *node_p;
-    Message msg;
 
     printf("removing node %d\n", ntohs(client_addr->sin_port));
 
@@ -207,7 +223,8 @@ void peer_stopped(Graph *peers, int sd, struct sockaddr_in *client_addr, bool se
 
     if (neighbors== NULL)
     {
-        printf("peer was not connected\n");
+        printf("peer was not connected to other peers\n");
+        if (send_ack) send_stop_ack(sd, client_addr);
         return;
     }
 
@@ -235,23 +252,8 @@ void peer_stopped(Graph *peers, int sd, struct sockaddr_in *client_addr, bool se
         node_p = node_p->next;
     }
 
-    if (send_ack)
-    {
-        printf("sending ACK to stopped peer\n");
-
-        msg.type = MSG_STOP;
-        msg.body_len = 0;
-        msg.body = NULL;
-
-        ret = send_message_to(sd, &msg, client_addr);
-        if (ret == -1)
-        {
-            printf("could not send acknowledgement to stopped peer\n");
-        }
-    }
+    if (send_ack) send_stop_ack(sd, client_addr);
 }
-
-
 
 /*----------------------------------------------
  |  I/O DEMULTIPLEXING
