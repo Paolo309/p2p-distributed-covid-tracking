@@ -430,9 +430,6 @@ void deserialize_peers(char *buffer, GraphNode **nodes)
     qty = ntohl(*(int32_t*)buffer);
     buffer += sizeof(int32_t);
 
-    printf("qty: %d\n", qty);
-    fflush(stdout);
-
     while (*nodes != NULL)
         nodes = &(*nodes)->next;
 
@@ -446,9 +443,6 @@ void deserialize_peers(char *buffer, GraphNode **nodes)
         addr.sin_port = ntohs(*(in_port_t*)buffer);
         buffer += sizeof(in_port_t);
 
-        printf("adding %d %d\n", addr.sin_addr.s_addr, addr.sin_port);
-        fflush(stdout);
-
         peer = create_peer(&addr);
         *nodes = create_node(peer, NULL);
 
@@ -460,6 +454,3 @@ void deserialize_peers(char *buffer, GraphNode **nodes)
         qty--;
     }
 }
-
-
-

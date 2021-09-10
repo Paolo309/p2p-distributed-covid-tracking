@@ -16,8 +16,6 @@ char **get_command_line(const char* str, int *argc)
 
     if (argc == NULL) return NULL;
     
-    /* https://www.adoclib.com/blog/how-to-read-from-input-until-newline-is-found-using-scanf.html */
-    
     /* shell-like expansion of string in buffer into p */
     if (wordexp(str, &p, 0)) /* returns 0 on success */
         return NULL;
@@ -53,8 +51,7 @@ char **scan_command_line(int *argc)
 
     if (argc == NULL) return NULL;
     
-    /* https://www.adoclib.com/blog/how-to-read-from-input-until-newline-is-found-using-scanf.html */
-    check = scanf("%[^\n]", buffer); /* %*c */
+    check = scanf("%[^\n]", buffer);
     getchar();
 
     if (check == 0)
@@ -77,28 +74,4 @@ void free_command_line(int argc, char **argv)
     while (argc > 0) 
         free(argv[--argc]);
     free(argv);
-}
-
-int main_test_cmd()
-{
-    int argc, i;
-    char **argv;
-
-    argv = scan_command_line(&argc);
-
-    if (argv == NULL)
-    {
-        printf("errore\n");
-        goto fine;
-    }
-
-    for (i = 0; i < argc; i++)
-    {
-        printf("arg %d: %s\n", i, argv[i]);
-    }
-
-    free_command_line(argc, argv);
-fine:
-
-    return 0;
 }

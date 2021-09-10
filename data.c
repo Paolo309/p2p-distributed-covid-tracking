@@ -37,16 +37,17 @@ void time_to_str(char *str, time_t *timep)
     strftime(str, TIMESTAMP_STRLEN, "%Y:%m:%d", timeinfo);
 
     /* making sure the time is correctly set */
-    if (timeinfo->tm_hour || timeinfo->tm_min || timeinfo->tm_sec)
+    /* if (timeinfo->tm_hour || timeinfo->tm_min || timeinfo->tm_sec)
         printf(
             "\n{ERR %s -> %d:%d:%d}\n", 
             str, timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec
-        );
+        ); */
 }
 
 /**
  * Create a new entry.
  * 
+ * @return newly allocated entry
  */
 Entry *create_entry_empty()
 {
@@ -94,27 +95,15 @@ Entry *create_entry(time_t timestamp, int32_t tamponi, int32_t nuovi_casi, uint8
 }
 
 /** 
- * Compare two entries. Entries are sorted in this manner:
- * (1) earlier timestamp first;
- * (2) if timestamps are equal, TYPE_TOTAL comes first;
- * (3) if ENTRY_TYPEs are equal, AGGREG_DAILY comes first;
- * (4) if ENTRY_AGGREGs are equal, shortest period length first;
- * (5) if period lengths are equal, the entries are equal.
- * TODO correct comment
+ * Compare two entries. 
  * 
  * @param a 
  * @param b 
- * @return Returns a negative value if the first entry precedes the second; zero
- * if they are equal; a positive value otherwise.
+ * @return <0 if the first entry precedes the second; =0 if they are equal; >0 otherwise.
  */
 int cmp_entries(Entry *a, Entry *b)
 {
     int cmp_res;
-
-    /* printf("--- comparing\n");
-    printf("%ld %d %d\n", a->timestamp, a->flags, a->period_len);
-    printf("--- with\n");
-    printf("%ld %d %d\n", b->timestamp, b->flags, b->period_len); */
     
     cmp_res = a->timestamp - b->timestamp;
     if (cmp_res != 0)
@@ -181,19 +170,7 @@ void free_entry_list(EntryList *list)
  * @return true if the list is empty 
  */
 bool is_entry_list_empty(EntryList *list)
-{
-    if (list->length == 0 && (list->last != NULL))
-        printf("WARNING 1.a: invalid list pointers\n");
-
-    if (list->length == 0 && (list->first != NULL))
-        printf("WARNING 1.b: invalid list pointers\n");
-
-    if (list->length == 1 && (list->first != list->last || list->first == NULL))
-        printf("WARNING 2: invalid list pointers\n");
-
-    if (list->length > 1 && (list->first == list->last || list->first == NULL || list->last == NULL))
-        printf("WARNING 3: invalid list pointers\n");
-    
+{    
     return list->length == 0;
 }
 
@@ -232,6 +209,7 @@ void load_register_from_file(EntryList *entries, const char* file_name)
         tmp_time = str_to_time(tmp_str_time);
         tmp_entry = create_entry(tmp_time, tmp_tamponi, tmp_ncasi, flags, 0);
         
+        /* only read period_len if needed */
         if (tmp_entry->flags & ENTRY_AGGREG)  
             fscanf(fp, "%d", &tmp_entry->period_len);
 
@@ -253,13 +231,12 @@ void load_register_from_file(EntryList *entries, const char* file_name)
 }
 
 /**
- * Merge the src entry list into dest. At the end, both entry lists
- * head and tail pointer point to the same list. Duplicate entries are
- * aggregated into the version present in dest. The version in src gets
- * freed. Entries are kept sorted by ascending timestamps.
- * 
- * TODO check what to with flags! Should it only aggregate when dest flags
- * is not local?
+ * Merge the src entry list into dest. At the end, both dest and src
+ * pointers, though pointing to the originals EntryList instances, actually
+ * contain the same list (same head and tail pointers). Entries that get
+ * merged and duplicate entries are free. Entries are kept sorted by 
+ * ascending timestamps.
+ * Caution! Freeing src also frees dest.
  * 
  * @param dest 
  * @param src 
@@ -293,15 +270,6 @@ void merge_entry_lists(EntryList *dest, EntryList *src, bool strict)
        the head of one of the two */
     while (a != NULL && b != NULL)
     {
-        /* printf("\n##### CURRENT ENTRIES ######\n");
-        print_entry(a);
-        print_entry(b);
-        printf("\n###### DEBUG SRC LIST ######\n");
-        print_entries_asc(src);
-        printf("\n###### DEBUG DEST LIST ######\n");
-        print_entries_asc(dest);
-        printf("############ END ############\n\n"); */
-
         /* make `a` point to first entry in dest where a->timestamp <= b->timestamp */
         while (a != NULL && (cmp_res = cmp_entries(a, b)) > 0)
             a = a->prev;
@@ -519,8 +487,6 @@ void print_entry(Entry *entry)
     time_t tmp_end_period;
     char str_time[TIMESTAMP_STRLEN + 10];
 
-    /* printf("<%ld> ", entry->timestamp); */
-
     if (entry->flags & ENTRY_AGGREG)
     {
         time_to_str(str_time, &entry->timestamp);
@@ -630,7 +596,7 @@ char* allocate_entry_list_buffer(int n)
 }
 
 /**
- * Serialize list of entries into buffer.
+ * Serialize list of entries into buffer dest.
  * 
  * @param dest 
  * @param list 
@@ -710,14 +676,21 @@ char *deserialize_entries(char *src, EntryList *list)
         prec = entry;
     }
 
-    if (list->first != NULL)
-        printf("fin des %ld\n", list->first->timestamp);
-
     list->last = entry;
 
     return src;
 }
 
+/**
+ * Search entry with given parameter and return its o=pointer if found, NULL otherwise.
+ * Argument `from` must point to the last element of the list that is being looked up.
+ * 
+ * @param from 
+ * @param timestamp 
+ * @param flags 
+ * @param period_len 
+ * @return pointer to found entry, NULL otherwise
+ */
 Entry *search_entry(Entry *from, time_t timestamp, int32_t flags, int32_t period_len)
 {
     Entry *entry, *model;
@@ -733,71 +706,4 @@ Entry *search_entry(Entry *from, time_t timestamp, int32_t flags, int32_t period
     }
 
     return entry;
-}
-
-int main_test()
-{
-    EntryList entries, others;
-    Entry *tmp;    
-    time_t tmp_time;
-    char buff2[4096];
-    char* buff3 = NULL;
-
-    init_entry_list(&entries);
-    init_entry_list(&others);
-    
-    load_register_from_file(&entries, FNAME_REGISTER);
-    
-    printf("entries\n");
-    print_entries_asc(&entries, NULL);
-    
-    tmp_time = str_to_time("2020:01:12");
-    tmp = create_entry(tmp_time, 100, 23, SCOPE_GLOBAL, 0);
-    add_entry(&others, tmp);
-
-    tmp_time = str_to_time("2020:02:07");
-    tmp = create_entry(tmp_time, 200, 46, SCOPE_LOCAL | TYPE_VARIATION, 0);
-    add_entry(&others, tmp);
-
-    tmp_time = str_to_time("2020:02:08");
-    tmp = create_entry(tmp_time, 2000, 460, SCOPE_GLOBAL | TYPE_TOTAL | AGGREG_PERIOD, 0);
-    tmp->period_len = 3;
-    add_entry(&others, tmp);
-    
-    printf("others\n");
-    print_entries_asc(&others, NULL);
-    
-    merge_entry_lists(&entries, &others, COPY_STRICT);
-    
-    printf("\nentries\n");
-    print_entries_asc(&entries, NULL);
-    
-    printf("others\n");
-    print_entries_asc(&others, NULL);
-
-    printf("\nserializing\n");
-    print_entries_asc(&entries, NULL);
-
-    buff3 = allocate_entry_list_buffer(entries.length);
-    serialize_entries(buff3, &entries);
-
-    memcpy(buff2, buff3, 1024);
-
-    init_entry_list(&others);
-    deserialize_entries(buff2, &others);
-
-    printf("deserialized\n");
-    print_entries_asc(&others, NULL);
-
-    
-    /* printf("\n\nentries dsc\n");
-    print_entries_dsc(&entries);
-    
-    printf("others dsc\n");
-    print_entries_dsc(&others); */
-    
-    /* tmp = create_entry("2020-02-09", 100, 23, ENTRY_LOCAL);
-    add_entry(&others, tmp); */
-    
-    return 0;
 }

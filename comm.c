@@ -1,22 +1,3 @@
-/*
-types of messages:
-name                | body                    | description
---------------------|-------------------------|-----------------------------
-START                addr and port             connect to ds (register peer)
-SET_NBRS             list of nbrs              set nbrs list
-STOP                 addr and port (?)         unconnect from ds (unregister peer)
-ADD_ENTRY            list: entry key, value    tell peer to add specified entries
-REQ_DATA             aggr data req             ask peer for aggr data
-REPLY_DATA           aggr data res             reply with aggr data or null
-FLOOD_FOR_ENTRIES    list: entry key           ask peer to look for entries owners
-ENTRIES_FOUND        list: entry key, owner    tell peer entries owners
-REQ_ENTRIES          list: entry key           ask for entries to owner peer
-REPLY_ENTRIES        list: entry key, value    tell peer owned entries 
-
-protocols for sending lists:
-
-*/
-
 #include "comm.h"
 
 char _buffer[BUFSIZE];
@@ -152,6 +133,7 @@ int recv_message_from(int sd, Message *msgp, struct sockaddr_in* from)
     else 
         lenp = NULL;
 
+
     expected_len = 0;
     tot_recvd = 0;
     do
@@ -167,6 +149,7 @@ int recv_message_from(int sd, Message *msgp, struct sockaddr_in* from)
 
     } while (ret > 0 && tot_recvd < expected_len && tot_recvd < BUFSIZE);
     
+
     if (ret != 0 && tot_recvd < expected_len)
     {
         if (ret == -1) perror("recvfrom error");
@@ -203,116 +186,4 @@ int recv_message_from(int sd, Message *msgp, struct sockaddr_in* from)
 int recv_message(int sd, Message *msgp)
 {
     return recv_message_from(sd, msgp, NULL);
-}
-
-
-void server()
-{
-    int ret, sd, count;
-    struct sockaddr_in server_addr, client_addr;
-    Message msg;
-    
-    memset(&server_addr, 0, sizeof(server_addr));
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(4242);
-    server_addr.sin_addr.s_addr = INADDR_ANY;
-    /* inet_pton(AF_INET, "127.0.0.1", &server_addr.sin_addr); */
-    
-    /* SERVE??? */
-    memset(&client_addr, 0, sizeof(client_addr));
-    
-    sd = socket(AF_INET, SOCK_DGRAM, 0);
-    
-    ret = bind(sd, (struct sockaddr*)&server_addr, sizeof(server_addr));
-    if (ret == -1)
-    {
-        perror("bind error");
-        exit(EXIT_FAILURE);
-    }
-    
-    /* ret = listen(sd, 1);
-    if (ret == -1)
-    {
-        perror("listen error");
-        exit(EXIT_FAILURE);
-    }
-    
-    len = sizeof(client_addr);
-    conn = accept(sd, (struct sockaddr*)&client_addr, &len);
-    if (conn == -1)
-    {
-        perror("accept error");
-        exit(EXIT_FAILURE);
-    } */
-        
-    for (count = 0; count < 5; count++)
-    {
-        recv_message_from(sd, &msg, &client_addr);
-        
-        printf("received header (%d, %d)\nbody: \"%s\"\n", msg.type, msg.body_len, msg.body);
-        
-        memset(&msg, 'a', sizeof(msg));
-        
-        sprintf(msg.body, "Greeting from server %d", count);
-        msg.body_len = strlen(msg.body) + 1;
-        
-        send_message_to(sd, &msg, &client_addr);
-    }
-}
-
-void client()
-{
-    int ret, sd, count;
-    struct sockaddr_in server_addr;
-    Message msg;
-    
-    memset(&server_addr, 0, sizeof(server_addr));
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(4242);
-    inet_pton(AF_INET, "127.0.0.1", &server_addr.sin_addr);
-    
-    sd = socket(AF_INET, SOCK_DGRAM, 0);
-    
-    ret = connect(sd, (struct sockaddr*)&server_addr, sizeof(server_addr));
-    if (ret == -1)
-    {
-        perror("connect error");
-        exit(EXIT_FAILURE);
-    }
-    
-    for (count = 0; count < 5; count++)
-    {
-        msg.type = 3;
-        sprintf(msg.body, "Hi from client %d", count);
-        msg.body_len = strlen(msg.body) + 1;
-        
-        send_message(sd, &msg);
-        
-        printf("send %s\n", msg.body);
-        
-        memset(&msg, 'a', sizeof(msg));
-        
-        recv_message(sd, &msg);
-        
-        printf("received header (%d, %d)\nbody: \"%s\"\n", msg.type, msg.body_len, msg.body);
-    }
-}
-
-int main_test_comm(int argc, char **argv)
-{
-    if (argc != 2)
-    {
-        printf("usage: comm <C|S>\n");
-        exit(EXIT_FAILURE);
-    }
-    
-    if      (argv[1][0] == 'C') client();
-    else if (argv[1][0] == 'S') server();
-    else
-    {
-        printf("unknown %c\n", argv[1][0]);
-        exit(EXIT_FAILURE);
-    }
-    
-    return 0;
 }

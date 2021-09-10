@@ -32,19 +32,13 @@ Flag field stores:
         period: entry value is relative to a period starting from timestamp
                 with duration specified by period_len
 
-Flag values:
+Some flag values:
     DAILY:
         0b000 = 0 = TOTAL      LOCALE
         0b001 = 1 = TOTAL      GLOBALE 
-        0b011 = 3 = VARIATION  GLOBALE ???
     AGGREG:
         0b101 = 5 = TOTAL      GLOBALE
         0b111 = 7 = VARIATION  GLOBALE
-
-Entries of the same type are ordered by timestamp. Two entries with different
-type but same timestamp are ordered by type: TYPE_TOTAL first. If two entries
-have the same type, the ones that are a sum over a period are stored after
-the ones relative to a single day.
 
 While adding a new entry into the register, if an entry with same type and
 timestamp is already present, the two are aggregated only if the already
