@@ -613,6 +613,7 @@ bool ask_aggr_to_neighbors(ThisPeer *peer, EntryList *req_aggr, EntryList *recvd
         
         init_entry_list(&data_received);
         deserialize_entries(msg.body, &data_received);
+        free(msg.body);
 
         if (!is_entry_list_empty(&data_received))
         {
@@ -727,6 +728,7 @@ void ask_aggr_to_peers(
         
         init_entry_list(&tmp_data_received);
         deserialize_entries(msg.body, &tmp_data_received);
+        free(msg.body);
 
         /* print_entries_asc(&tmp_data_received, "peer sent"); */
 
@@ -1780,8 +1782,8 @@ void handle_set_neighbors_response(ThisPeer *peer, Message *msgp)
         sd = socket(AF_INET, SOCK_STREAM, 0);
         if (sd == -1)
         {
-            perror("[SET NBRS]socket error");
-            printf("[SET NBRS]could not start listening for peers\n");
+            perror("[SET NBRS] socket error");
+            printf("[SET NBRS] could not start listening for peers\n");
             return;
         }
 
@@ -1815,6 +1817,8 @@ void handle_set_neighbors_response(ThisPeer *peer, Message *msgp)
     free_graph(&peer->neighbors);
     peer->neighbors.first = peer->neighbors.last = NULL;
     deserialize_peers(msgp->body, &peer->neighbors.first);
+    free(msgp->body);
+
     print_peers(peer->neighbors.first);
 
     peer->state = STATE_STARTED;
@@ -1945,6 +1949,7 @@ void handle_flood_for_entries(ThisPeer *peer, Message *msgp, int sd)
 
         msgp->type = MSG_ENTRIES_FOUND;
         msgp->id = get_peer_id(peer);
+        free(msgp->body);
         
         set_num_of_peers(msgp, 0);
         
@@ -1965,6 +1970,7 @@ void handle_flood_for_entries(ThisPeer *peer, Message *msgp, int sd)
     request->required_entries = malloc(sizeof(EntryList));
     init_entry_list(request->required_entries);
     deserialize_entries(msgp->body, request->required_entries);
+    free(msgp->body);
 
     printf("[FLOOD REQ] I've been asked to look for:\n");
     print_entries_asc(request->required_entries, NULL);
@@ -2242,6 +2248,8 @@ void handle_flood_response(ThisPeer *peer, Message *msgp, int sd)
         remove_desc(&request->peers_involved, NULL, sd);
     }
 
+    free(msgp->body);
+
     /* TODO check when to close the sockets (in demux? really?) */
     /* close(sd);
     remove_desc(&peer->master_read_set, &peer->fdmax_r, sd); */
@@ -2312,6 +2320,7 @@ void do_share_register(ThisPeer *peer, int sd)
     close(sd);
     remove_desc(&peer->master_write_set, &peer->fdmax_w, sd);
 
+    free(msg.body);
     free_entry_list(&shared_entries);
 
     request->nbrs_remaining--;
@@ -2336,6 +2345,8 @@ void handle_add_entry(ThisPeer *peer, Message *msgp)
 
     init_entry_list(&new_entries);
     deserialize_entries(msgp->body, &new_entries);
+    free(msgp->body);
+
     print_entry(new_entries.first);
 
     print_entries_asc(&new_entries, "new entries");
