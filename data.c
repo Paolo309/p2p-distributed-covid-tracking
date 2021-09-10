@@ -336,7 +336,7 @@ void merge_entry_lists(EntryList *dest, EntryList *src, bool strict)
             dest->last = b;
 
         dest->length++;
-        src->length--; /* TODO correct? */
+        src->length--;
 
         b = tmp_prev;
     }
